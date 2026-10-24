@@ -2,7 +2,8 @@
 # BuildKit uses this file because it sits next to the Dockerfile; no .dockerignore is
 # needed in the Magento root itself.
 
-# Credentials and keys. Before this file existed they shipped in every pushed image (FINDINGS F-01).
+# Credentials and keys. Without these lines they'd be copied into the image, and so into
+# every registry it's pushed to.
 .auth-json
 auth.json
 app/etc/env.php

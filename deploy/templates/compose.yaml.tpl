@@ -17,7 +17,7 @@ name: {{PROJECT}}
 
 x-logging: &logging
   # Bounded logs for every container. Docker's default json-file driver grows
-  # without limit (FINDINGS F-17).
+  # without limit.
   driver: json-file
   options:
     max-size: "${LOG_MAX_SIZE:-10m}"
@@ -151,7 +151,7 @@ services:
       VARNISH_SIZE: ${VARNISH_SIZE:-256m}
       VARNISH_VCL_FILE: /etc/varnish/stack/default.vcl
     # Magento's X-Magento-Tags header can outgrow Varnish's 8 KB limit on large
-    # category pages, which then fail with a 503 (FINDINGS F-42). These are Adobe's
+    # category pages, which then fail with a 503. These are Adobe's
     # recommended values; raise them gradually if a 503 still appears.
     command: ["-p", "http_resp_hdr_len=65536", "-p", "http_resp_size=98304", "-p", "workspace_backend=98304"]
     volumes:
@@ -204,7 +204,7 @@ services:
     container_name: {{PROJECT}}-valkey-session
     restart: unless-stopped
     logging: *logging
-    # AOF on: a restart must not log out every customer and admin (FINDINGS F-13).
+    # AOF on: a restart must not log out every customer and admin.
     command: ["valkey-server", "--appendonly", "yes", "--appendfsync", "everysec", "--save", "",
               "--maxmemory", "${VALKEY_SESSION_MEMORY:-256mb}", "--maxmemory-policy", "volatile-lru"]
     volumes:

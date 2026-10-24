@@ -2,7 +2,7 @@
 # OpenSearch: one node, security plugin on, TLS on both the transport and HTTP layers.
 #
 # Certificates: generated for each install by deploy/setup into .stack/opensearch/certs,
-#   and mounted at config/certs. Never committed (FINDINGS F-19).
+#   and mounted at config/certs. Never committed: .stack/ is in .gitignore.
 # Users and roles: config/opensearch-security/*.yml, rendered from
 #   deploy/templates/opensearch. OpenSearch reads them itself only once, when it
 #   creates the security index on first start. After that, bin/opensearch-security

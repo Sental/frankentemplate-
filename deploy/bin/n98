@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # bin/n98 <command> [args]: n98-magerun2 in the app container, as www-data.
-# It runs the phar from the Magento root's bin/ directory. The old wrapper called
-# bin/n98-magerun2, which doesn't exist (FINDINGS F-32).
+# It runs bin/n98-magerun2.phar from the Magento root, which you download yourself
+# (the message below says where).
 # shellcheck source=_lib.sh
 . "$(dirname "$0")/_lib.sh"
 

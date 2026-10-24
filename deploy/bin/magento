@@ -2,7 +2,7 @@
 # bin/magento <command> [args]: bin/magento in the app container, as www-data.
 #
 # Warns before commands whose effect won't survive. env.php is regenerated from .env
-# on every container start (FINDINGS F-12), so cache:enable/disable and
+# on every container start, so cache:enable/disable and
 # config:set --lock-env only last until the next restart. Change .env instead.
 # shellcheck source=_lib.sh
 . "$(dirname "$0")/_lib.sh"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # bin/root: a root shell in the app container.
 # Run PHP from bin/bash, not here: files PHP creates as root break the www-data
-# workers (FINDINGS F-06).
+# workers.
 # shellcheck source=_lib.sh
 . "$(dirname "$0")/_lib.sh"
 

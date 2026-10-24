@@ -7,13 +7,12 @@
 #   backend host   the active app: {{PROJECT}}-app in dev, {{PROJECT}}-app-<colour> on
 #                  a server. Varnish resolves it once, when this VCL loads, and refuses
 #                  to load if it doesn't resolve. That's why this names only the active
-#                  colour, and why a release reloads this VCL after switching
-#                  (FINDINGS F-02).
-#   admin path     ADMIN_FRONT_NAME from .env, in both places it's needed (FINDINGS F-26).
+#                  colour, and why a release reloads this VCL after switching.
+#   admin path     ADMIN_FRONT_NAME from .env, in both places it's needed.
 #
 # The purge ACL trusts the private address ranges, not hostnames or one subnet:
 #   - Hostnames would be frozen when the VCL loads. A recreated app, cron or consumers
-#     container gets a new IP, and its purges would get a 405 (FINDINGS F-02).
+#     container gets a new IP, and its purges would get a 405.
 #   - The backend subnet is Docker's choice and can change whenever the network is
 #     recreated. Trusting the private ranges keeps the ACL constant.
 # That's safe only because nothing outside the stack can reach Varnish directly. Its
@@ -50,7 +49,8 @@ acl purge {
 
 sub vcl_recv {
     # Answered here, without the backend, so the edge's health check measures Varnish
-    # alone (FINDINGS F-03). The container health check uses it too.
+    # alone: the edge keeps routing here while the app is down, so grace can serve
+    # cached pages. The container health check uses it too.
     if (req.url == "/.varnish-health") {
         return (synth(200, "OK"));
     }

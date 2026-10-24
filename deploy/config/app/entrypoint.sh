@@ -10,8 +10,8 @@
 #
 # Each mode first does the privileged preparation as root (trusting the OpenSearch
 # CA, creating and owning the writable directories, writing env.php), then drops to
-# www-data. PHP never runs as root here: root-owned files in var/ and generated/
-# broke the old stack twice (FINDINGS F-06). Supervisor itself stays root so it can
+# www-data. PHP never runs as root here: root-owned files in var/ and generated/ would
+# break the www-data workers. Supervisor itself stays root so it can
 # write to the container's stdout, but every program it starts runs as www-data.
 # =============================================================================
 set -euo pipefail
@@ -94,7 +94,7 @@ fix_ownership() {
     done
     [ "${#paths[@]}" -gt 0 ] || return 0
     # Only touch what www-data doesn't already own. A blanket chown -R gets slower
-    # with every image uploaded, and delays every start (FINDINGS F-28).
+    # with every image uploaded, and delays every start.
     find "${paths[@]}" \( ! -user "$APP_USER" -o ! -group "$APP_USER" \) \
         -exec chown -h "$APP_USER:$APP_USER" {} +
 }
@@ -136,7 +136,7 @@ cron_loop() {
     local group=$1
     while :; do
         # Start on the minute boundary. A fixed `sleep 60` slips later by each run's
-        # duration (FINDINGS F-29).
+        # duration.
         sleep $(( 60 - $(date +%s) % 60 ))
         run_as_app php "$MAGENTO_ROOT/bin/magento" cron:run --group="$group" \
             || log "cron:run --group=$group exited $?"

@@ -4,9 +4,9 @@
 #   - One app container on the dev image, with the code bind-mounted. Cron and
 #     consumers share that image.
 #   - Mail always goes to Mailpit, whatever the database says, so an imported prod
-#     database can't send real mail (FINDINGS F-10).
+#     database can't send real mail.
 #   - The tools have no host ports. Caddy serves them on subdomains of STORE_DOMAIN,
-#     and Caddy itself binds to 127.0.0.1 (FINDINGS F-21):
+#     and Caddy itself binds to 127.0.0.1, so nothing is reachable from the network:
 #       https://logs.<domain>    Dozzle (container logs, including the Magento log files)
 #       https://mail.<domain>    Mailpit
 #       https://pma.<domain>     phpMyAdmin
@@ -109,8 +109,8 @@ services:
       - backend
 
   # Recreating the app gives it a new IP, and Varnish only resolves its backend when
-  # the VCL loads. Restarting Varnish with the app keeps it on the live container
-  # (FINDINGS F-02). Servers use bin/release's VCL reload instead.
+  # the VCL loads. Restarting Varnish with the app keeps it on the live container.
+  # Servers use bin/release's VCL reload instead.
   {{PROJECT}}-varnish:
     depends_on:
       {{PROJECT}}-app:

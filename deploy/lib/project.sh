@@ -66,10 +66,34 @@ project_new() {
     project_state_set create
     info "creating a Mage-OS $version project in $root (composer create-project; this takes a few minutes)"
     project_container_step create "$version"
+    project_gitignore
 
     project_state_set curate
     project_curate
     project_state_clear
+}
+
+# project_gitignore: a starting .gitignore for a new project. Mage-OS's create-project
+# writes none, and both ways of keeping the code need one: src/ committed in the
+# template's repository, or src/ as its own repository. An existing file is left alone.
+project_gitignore() {
+    local file
+    file="$(magento_root)/.gitignore"
+    [ -e "$file" ] && return 0
+    cat > "$file" <<'EOF'
+# Written by deploy/setup for a new project: what Composer, Magento and the stack
+# recreate, and the files that hold secrets. Extend it as the project needs.
+/vendor/
+/generated/
+/var/
+/pub/static/
+/pub/media/
+/node_modules/
+/auth.json
+/app/etc/env.php
+/app/etc/env.php.backup.*
+EOF
+    info "wrote $file"
 }
 
 # project_curate: adds FrankenPHP worker mode to the project in MAGENTO_ROOT. Safe to

@@ -108,8 +108,8 @@ RUN if [ -f /usr/local/lib/stack/hooks/pre-composer.sh ]; then \
 COPY composer.json composer.lock ./
 COPY patches/ patches/
 # The credentials arrive as a BuildKit secret and are only ever held in an
-# environment variable, so they never reach a layer. Writing them into the build
-# context is how they ended up in every pushed image (FINDINGS F-01).
+# environment variable, so they never reach a layer. Written into the build context,
+# they'd end up in the image and in every registry it's pushed to.
 RUN --mount=type=secret,id=composer_auth,required=false \
     if [ -f /run/secrets/composer_auth ]; then export COMPOSER_AUTH="$(cat /run/secrets/composer_auth)"; fi; \
     composer install --no-dev --no-interaction --no-progress --prefer-dist --optimize-autoloader

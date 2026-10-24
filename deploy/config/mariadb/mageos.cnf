@@ -10,7 +10,7 @@ collation-server      = utf8mb4_unicode_ci
 
 # --- InnoDB ---
 # innodb_buffer_pool_instances is deliberately absent: deprecated since MariaDB 10.5,
-# which uses a single buffer pool (FINDINGS F-36).
+# which uses a single buffer pool.
 innodb_log_file_size            = 256M
 # 2 flushes the log once a second instead of on every commit. Safe on a single server
 # with journaled storage; set 1 for strict durability.

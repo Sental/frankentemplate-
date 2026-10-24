@@ -6,9 +6,9 @@
 # parent of the `bin` symlink deploy/setup creates. The scripts are meant to be
 # called as <root>/bin/<name>. To call them by another path, set STACK_ROOT.
 #
-# .env is never `source`d. It holds values bash can't parse (spaces, `$`), and a
-# sourced .env broke the old wrappers on an INSTALL_DATE with spaces (FINDINGS
-# F-23). Compose reads it itself; scripts read single keys with env_get.
+# .env is never `source`d. It holds values bash can't parse (spaces, `$`): INSTALL_DATE
+# alone, "Sat, 14 Feb 2026 09:02:44 +0000", breaks a sourced .env. Compose reads it
+# itself; scripts read single keys with env_get.
 # =============================================================================
 set -euo pipefail
 
@@ -204,8 +204,8 @@ tty_flag() {
     if [ -t 0 ] && [ -t 1 ]; then printf ''; else printf -- '-T'; fi
 }
 
-# Runs a command in the app container as www-data. PHP never runs as root
-# (FINDINGS F-06).
+# Runs a command in the app container as www-data. PHP never runs as root: the files
+# it created would be root's, and the www-data workers couldn't write them.
 php_exec() {
     local tty
     tty=$(tty_flag)

@@ -3,9 +3,8 @@
 # log-tailer (dev): streams every Magento log file to stdout, so Dozzle shows it.
 #
 # It follows every *.log under var/log and var/debug, including files created
-# after it starts, and prefixes each line with its file name. The old tailer
-# followed a fixed list, so new logs and every *-error.log were invisible
-# (FINDINGS F-25).
+# after it starts, and prefixes each line with its file name. A fixed list of files
+# would miss every log a module adds later, and every *-error.log.
 #
 # Every TAIL_RESCAN seconds it rescans the directories. When the set of files
 # changes, it restarts `tail` on the new set. A FIFO that stays open keeps the

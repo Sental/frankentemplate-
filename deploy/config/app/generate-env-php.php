@@ -5,9 +5,9 @@
  * Why a generator: the stack treats env.php as derived state. Every container start
  * rewrites it from .env, so an environment's configuration is exactly its .env, never
  * whatever a CLI command wrote into env.php months ago. In production that
- * immutability is the point (FINDINGS F-12). It has three consequences:
+ * immutability is the point. It has three consequences:
  *
- *  - var_export() does the quoting, so a secret may contain any character (F-11).
+ *  - var_export() does the quoting, so a secret may contain any character.
  *  - The file is replaced by an atomic rename, so the app, cron and consumers
  *    containers can start together without one of them reading half a file.
  *  - `bin/magento cache:enable` and `config:set --lock-env` only last until the next
@@ -143,8 +143,9 @@ function buildConfig(): array
 
     $defaultCache = [
         'id_prefix' => $prefix,
-        // A key of the Mage-OS 3.6 adapter map. A class name here silently puts the
-        // cache on the filesystem (FINDINGS, reference section).
+        // A key of the Mage-OS 3.6 adapter map (SymfonyAdapterProvider::$adapterTypeMap).
+        // Anything not in the map, a class name included, silently puts the cache on
+        // the filesystem.
         'backend' => 'valkey',
         'backend_options' => [
             'server' => required('CACHE_HOST'),
@@ -162,7 +163,7 @@ function buildConfig(): array
         ],
     ];
     // Preloaded ids are held in each worker's memory for its whole life. Only ids
-    // that change at deploy are safe to list (FINDINGS F-07).
+    // that change at deploy are safe to list: a worker serves any other id stale.
     $preload = listOf(env('MAGENTO_PRELOAD_KEYS'));
     if ($preload !== []) {
         $defaultCache['backend_options']['preload_keys'] = array_map(
@@ -177,7 +178,7 @@ function buildConfig(): array
     }
     $frontends = ['default' => $defaultCache];
     if ($fpc === 'builtin') {
-        // With Varnish this frontend is never read or written (FINDINGS F-27).
+        // Only for the built-in full-page cache: with Varnish, nothing reads or writes it.
         $frontends['page_cache'] = [
             'id_prefix' => $prefix,
             'backend' => 'valkey',

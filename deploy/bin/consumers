@@ -6,8 +6,8 @@
 #   status   Supervisor's view of the running consumers
 #   restart  recreates the consumers container, so .env changes take effect
 #
-# A consumer that was missing from the list used to need an image rebuild; now it's
-# one line in .env and `bin/consumers restart` (FINDINGS F-24).
+# Adding a consumer is one entry in MAGENTO_CONSUMERS in .env, then
+# `bin/consumers restart`. No image rebuild.
 # shellcheck source=_lib.sh
 . "$(dirname "$0")/_lib.sh"
 

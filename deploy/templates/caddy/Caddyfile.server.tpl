@@ -8,9 +8,9 @@
 	# apply a new Caddyfile without dropping connections.
 	admin localhost:2019
 	servers {
-		# Only Cloudflare may tell us who the visitor is. Without this, Magento saw
-		# Cloudflare's edge address as every customer's IP (FINDINGS F-08). The ranges
-		# come from deploy/config/caddy/cloudflare-ips.txt.
+		# Only Cloudflare may tell us who the visitor is. Without this, Magento sees
+		# Cloudflare's edge address as every customer's IP. The ranges come from
+		# deploy/config/caddy/cloudflare-ips.txt.
 		trusted_proxies static {{CLOUDFLARE_TRUSTED_PROXIES}}
 		client_ip_headers CF-Connecting-IP
 	}
@@ -33,8 +33,7 @@
 
 		# Varnish answers this itself, without asking the app. Caddy then keeps routing
 		# to Varnish while the app is down, so Varnish can serve cached pages from grace.
-		# The old check went through to the app and took Varnish out with it
-		# (FINDINGS F-03).
+		# A check that went through to the app would take Varnish out of rotation with it.
 		health_uri /.varnish-health
 		health_interval 10s
 		health_timeout 3s

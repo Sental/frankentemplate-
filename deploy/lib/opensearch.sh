@@ -11,7 +11,7 @@
 #   .stack/opensearch/hashes.env   bcrypt hashes of the three OpenSearch passwords in
 #                              .env, which bin/render puts into internal_users.yml
 #
-# Nothing here ever goes into a repository (FINDINGS F-19). Subjects and names match
+# Nothing here ever goes into a repository: .stack/ is in .gitignore. Subjects and names match
 # deploy/config/opensearch/opensearch.yml: admin_dn CN=admin,OU=stack,O=stack and
 # nodes_dn CN=node,OU=stack,O=stack.
 # =============================================================================
