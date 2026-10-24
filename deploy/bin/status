@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# bin/status: the stack's containers, their state and health.
+# shellcheck source=_lib.sh
+. "$(dirname "$0")/_lib.sh"
+
+compose ps "$@"

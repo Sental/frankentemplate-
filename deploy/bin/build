@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# bin/build [tag]
+#   dev:     rebuilds the dev image (<project>-app:dev). Takes no tag.
+#   server:  builds the prod image locally under <tag>, the way CI does: same
+#            Dockerfile, named deploy context, Composer credentials from
+#            <magento root>/auth.json as a BuildKit secret (never copied into a layer).
+#            CI normally builds prod images; this exists for testing a build by hand.
+# shellcheck source=_lib.sh
+. "$(dirname "$0")/_lib.sh"
+
+if is_dev && [ $# -eq 0 ]; then
+    compose build "$(service app)"
+    exit 0
+fi
+
+tag=${1:-}
+[ -n "$tag" ] || die "usage: bin/build <image:tag> (builds the prod target)"
+root=$(magento_root)
+args=(
+    --build-context "deploy=$DEPLOY_DIR"
+    -f "$DEPLOY_DIR/Dockerfile"
+    --target prod
+    --build-arg "PHP_VERSION=$(env_get PHP_VERSION 8.5)"
+    --build-arg "THEME_PATHS=$(env_get THEME_PATHS)"
+    --build-arg "LOCALES=$(env_get LOCALES en_US)"
+    --build-arg "SCD_JOBS=$(env_get SCD_JOBS 1)"
+    --build-arg "HOOK_ENV=$(env_get HOOK_ENV)"
+    --build-arg "APP_CODE_HASH=$(find "$root/app/code" "$root/app/design" -type f -print0 2>/dev/null | sort -z | xargs -0 -r md5sum | md5sum | cut -d' ' -f1)"
+    -t "$tag"
+)
+if [ -f "$root/auth.json" ]; then
+    args+=(--secret "id=composer_auth,src=$root/auth.json")
+else
+    warn "no $root/auth.json: building without Composer credentials"
+fi
+docker buildx build "${args[@]}" "$root"

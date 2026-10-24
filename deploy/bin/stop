@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# bin/stop [-v]
+# Stops and removes the stack's containers. Named volumes (the database, unless
+# MARIADB_DATA points elsewhere; RabbitMQ; OpenSearch; sessions) are kept.
+# -v also deletes those volumes, and asks you to type the project name first.
+# STACK_YES=1 skips the question, for scripts that mean it.
+# shellcheck source=_lib.sh
+. "$(dirname "$0")/_lib.sh"
+
+for arg in "$@"; do
+    case "$arg" in
+        -v|--volumes)
+            name=$(project)
+            if [ "${STACK_YES:-0}" != "1" ]; then
+                [ -t 0 ] || die "-v deletes this project's volumes. Run it in a terminal, or set STACK_YES=1"
+                warn "-v deletes every named volume of project '$name', including its database unless MARIADB_DATA is set"
+                read -r -p "Type the project name to confirm: " answer
+                [ "$answer" = "$name" ] || die "not confirmed; nothing deleted"
+            fi
+            ;;
+    esac
+done
+
+compose down "$@"

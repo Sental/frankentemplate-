@@ -1,0 +1,43 @@
+# =============================================================================
+# OpenSearch: one node, security plugin on, TLS on both the transport and HTTP layers.
+#
+# Certificates: generated for each install by deploy/setup into .stack/opensearch/certs,
+#   and mounted at config/certs. Never committed (FINDINGS F-19).
+# Users and roles: config/opensearch-security/*.yml, rendered from
+#   deploy/templates/opensearch. OpenSearch reads them itself only once, when it
+#   creates the security index on first start. After that, bin/opensearch-security
+#   applies them (securityadmin.sh, with the admin certificate), and deploy/setup runs
+#   it every time. The files win: changes made through the security REST API or
+#   Dashboards are overwritten on the next setup run.
+# cluster.name and node.name come from the compose file, as environment variables.
+# =============================================================================
+
+discovery.type: single-node
+network.host: 0.0.0.0
+bootstrap.memory_lock: true
+
+plugins.security.disabled: false
+
+plugins.security.ssl.transport.pemcert_filepath: certs/node.pem
+plugins.security.ssl.transport.pemkey_filepath: certs/node-key.pem
+plugins.security.ssl.transport.pemtrustedcas_filepath: certs/root-ca.pem
+plugins.security.ssl.transport.enforce_hostname_verification: false
+
+plugins.security.ssl.http.enabled: true
+plugins.security.ssl.http.pemcert_filepath: certs/node.pem
+plugins.security.ssl.http.pemkey_filepath: certs/node-key.pem
+plugins.security.ssl.http.pemtrustedcas_filepath: certs/root-ca.pem
+
+# Create the security index from config/opensearch-security on first start.
+plugins.security.allow_default_init_securityindex: true
+# Subjects of the certificates deploy/setup generates.
+plugins.security.authcz.admin_dn:
+  - "CN=admin,OU=stack,O=stack"
+plugins.security.nodes_dn:
+  - "CN=node,OU=stack,O=stack"
+plugins.security.restapi.roles_enabled: ["all_access"]
+
+# No audit index: it grows forever, and nothing in this stack reads it.
+plugins.security.audit.type: noop
+plugins.security.enable_snapshot_restore_privilege: true
+plugins.security.check_snapshot_restore_write_privileges: true

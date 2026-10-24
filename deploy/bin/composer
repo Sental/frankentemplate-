@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# bin/composer <command> [args]: Composer in the dev app container, as www-data.
+# Dev only: the prod image has no Composer, and runs exactly what was built.
+# shellcheck source=_lib.sh
+. "$(dirname "$0")/_lib.sh"
+
+require_dev
+php_exec composer "$@"

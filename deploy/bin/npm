@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# bin/npm <command> [args]: npm in the dev app container, as www-data.
+# It runs in the first THEME_PATHS entry from .env. Set NPM_DIR (relative to the
+# Magento root) to use another directory: NPM_DIR=app/design/... bin/npm run watch
+# shellcheck source=_lib.sh
+. "$(dirname "$0")/_lib.sh"
+
+require_dev
+dir=${NPM_DIR:-$(env_get THEME_PATHS | awk '{print $1}')}
+[ -n "$dir" ] || die "no directory to run npm in: set THEME_PATHS in .env, or NPM_DIR"
+
+tty=$(tty_flag)
+# shellcheck disable=SC2086 # $tty is empty or exactly -T
+compose exec $tty -u www-data -w "/app/$dir" "$(app_service)" npm "$@"

@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# bin/xdebug on [mode] | off | status   (dev)
+#   on [mode]  sets XDEBUG_MODE (default "debug"; e.g. "debug,develop" or "profile")
+#              and recreates the app container
+#   off        sets XDEBUG_MODE=off and recreates it
+#   status     the mode the running app container started with
+#
+# Debugging starts only when the request asks for it: an XDEBUG_TRIGGER cookie or
+# your IDE's browser extension (xdebug.start_with_request=trigger), so leaving it on
+# costs little. Recreating the app also restarts Varnish (see compose.dev.yaml).
+# shellcheck source=_lib.sh
+. "$(dirname "$0")/_lib.sh"
+
+require_dev
+case "${1:-status}" in
+    on)
+        env_set XDEBUG_MODE "${2:-debug}"
+        compose up -d "$(service app)"
+        info "Xdebug mode '${2:-debug}'. The IDE listens on port 9003; requests start a session with the XDEBUG_TRIGGER cookie."
+        ;;
+    off)
+        env_set XDEBUG_MODE off
+        compose up -d "$(service app)"
+        info "Xdebug off"
+        ;;
+    status)
+        compose exec -T "$(service app)" printenv XDEBUG_MODE || true
+        ;;
+    *)
+        die "usage: bin/xdebug on [mode] | off | status"
+        ;;
+esac

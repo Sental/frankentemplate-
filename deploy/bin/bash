@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# bin/bash: a shell in the app container, as www-data, which is who PHP runs as.
+# Use bin/root for a root shell.
+# shellcheck source=_lib.sh
+. "$(dirname "$0")/_lib.sh"
+
+php_exec bash "$@"

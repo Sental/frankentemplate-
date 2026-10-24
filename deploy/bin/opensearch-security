@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# bin/opensearch-security: applies the rendered OpenSearch security files (internal
+# users, roles, role mappings) to the running cluster.
+#
+# OpenSearch reads them only when it first creates its security index, so without this
+# a change to a role in deploy/templates/opensearch, or a regenerated password hash,
+# never reaches an existing cluster. deploy/setup runs it on every run, once OpenSearch
+# is healthy. The rendered files are the source of truth: users, roles and mappings
+# changed through Dashboards or the security REST API are overwritten.
+#
+# It renders first, then runs OpenSearch's own securityadmin.sh in the container,
+# authenticated by the admin client certificate (admin_dn in
+# deploy/config/opensearch/opensearch.yml), with hostname verification on: the node
+# certificate names localhost. It reads the files through a directory mount, which
+# shows bin/render's newest files (compose.yaml).
+# shellcheck source=_lib.sh
+. "$(dirname "$0")/_lib.sh"
+
+[ $# -eq 0 ] || die "usage: bin/opensearch-security (no arguments)"
+
+"$(dirname "$0")/render"
+
+certs=/usr/share/opensearch/config/certs
+tool=/usr/share/opensearch/plugins/opensearch-security/tools/securityadmin.sh
+# Roles before their mappings, so a mapping never names a role that isn't there yet.
+for pair in internal_users.yml:internalusers roles.yml:roles roles_mapping.yml:rolesmapping; do
+    file=${pair%%:*}
+    type=${pair#*:}
+    info "applying $file"
+    compose exec -T "$(service opensearch)" "$tool" \
+        -f "/run/stack/opensearch-security/$file" -t "$type" -icl -h localhost \
+        -cacert "$certs/root-ca.pem" -cert "$certs/admin.pem" -key "$certs/admin-key.pem"
+done
+info "OpenSearch security configuration applied"

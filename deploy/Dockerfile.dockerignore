@@ -1,0 +1,29 @@
+# The build context is the Magento root. Nothing listed here can reach an image layer.
+# BuildKit uses this file because it sits next to the Dockerfile; no .dockerignore is
+# needed in the Magento root itself.
+
+# Credentials and keys. Before this file existed they shipped in every pushed image (FINDINGS F-01).
+.auth-json
+auth.json
+app/etc/env.php
+app/etc/env.php.*
+**/*.pem
+**/*-key.pem
+
+# The stack's own files come from the named `deploy` context, never from here.
+deploy
+
+# Repository and editor state.
+.git
+.github
+.idea
+.vscode
+
+# Rebuilt inside the image, or runtime state that must never be baked in.
+vendor
+generated
+var
+pub/static
+pub/media
+**/node_modules
+*.log

@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# bin/restart [service...]
+# Restarts containers in place, keeping their config and IP. To apply a .env change,
+# use bin/start <service>, which recreates the container.
+# In worker mode, a PHP change needs `bin/restart app`, unless FRANKENPHP_WATCH=1 is
+# already restarting the workers for you.
+# shellcheck source=_lib.sh
+. "$(dirname "$0")/_lib.sh"
+
+map_args "$@"
+compose restart "${MAPPED[@]}"

@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+#
+# Runs PHPUnit in the app container, as www-data.
+#
+# The working directory is dev/tests/unit, not the Magento root, because the Allure
+# extension registered in phpunit.xml.dist resolves its config path from the current
+# directory. Run from anywhere else, every invocation warns that the config file
+# doesn't exist. PHPUnit also finds phpunit.xml.dist there by itself, so no -c is needed.
+#
+# Relative paths are taken from the Magento root and rewritten to container paths:
+#
+#   bin/phpunit app/code/Vendor/Module/Test/Unit
+#   bin/phpunit app/code/Vendor/Module/Test/Unit --filter testSomething
+#
+# Pass ONE test path per run. PHPUnit treats any further paths as options and
+# silently ignores them, so a run would look complete while covering less.
+# shellcheck source=_lib.sh
+. "$(dirname "$0")/_lib.sh"
+
+if [ $# -eq 0 ]; then
+    cat >&2 <<'USAGE'
+bin/phpunit: run PHPUnit in the app container.
+
+Usage:
+  bin/phpunit <path> [phpunit options]
+
+Examples:
+  bin/phpunit app/code/Vendor/Module/Test/Unit
+  bin/phpunit app/code/Vendor/Module/Test/Unit --filter SomeTest
+
+Paths are relative to the Magento root. One path per run.
+USAGE
+    exit 1
+fi
+
+root=$(magento_root)
+ARGS=()
+paths=0
+for arg in "$@"; do
+    case "$arg" in
+        -*|/*) ARGS+=("$arg") ;;
+        *)
+            if [ -e "$root/$arg" ]; then
+                ARGS+=("/app/$arg")
+                paths=$((paths + 1))
+            else
+                ARGS+=("$arg")
+            fi
+            ;;
+    esac
+done
+[ "$paths" -le 1 ] || die "one test path per run: PHPUnit ignores any after the first"
+
+tty=$(tty_flag)
+# shellcheck disable=SC2086 # $tty is empty or exactly -T
+compose exec $tty -u www-data -w /app/dev/tests/unit "$(app_service)" \
+    php ../../../vendor/bin/phpunit "${ARGS[@]}"

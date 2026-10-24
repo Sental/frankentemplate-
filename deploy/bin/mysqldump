@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# bin/mysqldump [mariadb-dump args] > dump.sql
+# Dumps Magento's database, as the Magento user, to stdout.
+# --single-transaction gives a consistent snapshot of InnoDB tables without locking
+# the store; --quick streams rows instead of buffering whole tables.
+#   bin/mysqldump | gzip > dump.sql.gz
+# shellcheck source=_lib.sh
+. "$(dirname "$0")/_lib.sh"
+
+# shellcheck disable=SC2016 # the inner $ variables expand in the container
+compose exec -T "$(service mariadb)" \
+    sh -c 'exec mariadb-dump --single-transaction --quick -u"$MARIADB_USER" -p"$MARIADB_PASSWORD" "$MARIADB_DATABASE" "$@"' sh "$@"

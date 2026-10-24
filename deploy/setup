@@ -1,0 +1,505 @@
+#!/usr/bin/env bash
+# =============================================================================
+# deploy/setup: from nothing to a running stack, in one command.
+#
+#   deploy/setup dev    [options]   a dev machine (WSL or Linux); new or existing project
+#   deploy/setup server [options]   a staging or production server (Ubuntu or Debian)
+#
+# Run it from the project root, the directory that holds (or will hold) .env, the
+# rendered compose files and the `bin` link, or pass --root.
+#
+# It's safe to run again. Every step checks before it acts. .env values are filled in,
+# never overwritten, except the ones you pass. Nothing is deleted except what setup
+# itself left unfinished (a new project, or a failed install's database and env.php),
+# and only when you say so.
+#
+#   deploy/setup dev --help       all dev options
+#   deploy/setup server --help    all server options
+# =============================================================================
+set -euo pipefail
+
+SETUP_DEPLOY_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
+
+fail() { printf 'setup: %s\n' "$*" >&2; exit 1; }
+
+usage() {
+    cat >&2 <<'USAGE'
+Usage:
+  deploy/setup dev    [options]    set up a dev machine (deploy/setup dev --help)
+  deploy/setup server [options]    set up a staging or production server (deploy/setup server --help)
+USAGE
+    exit 1
+}
+
+usage_dev() {
+    cat >&2 <<'USAGE'
+deploy/setup dev: a dev stack on this machine.
+
+With no Magento in MAGENTO_ROOT, it creates a curated Mage-OS project: worker mode, the
+FrankenPHP packages and the root-area patch. It then hands over to Mage-OS's installer,
+with the stack's services pre-filled. With a project but no database, it hands over to the
+installer. With --import, it loads a dump instead.
+
+If a new project stopped partway, a re-run offers to repair it or create it again. A
+project without worker mode gets an offer to add it; setup never deletes a project it
+didn't create. If the installer fails, setup offers to clean up (env.php, the database
+it filled, maintenance mode) so a re-run can start it again, and a re-run asks again if
+that was declined.
+
+Options:
+  --root DIR             project root (default: the current directory)
+  --project NAME         PROJECT_NAME: containers become NAME-<service>. Lowercase
+                         letters and digits with single hyphens, at most 41 characters
+                         (default: from .env, or the root directory's name)
+  --domain DOMAIN        STORE_DOMAIN, e.g. dev.example.co.uk (default: <project>.test)
+  --magento-root PATH    where the Magento code is or will be, relative to the root (default: src)
+  --http-port N          host port for HTTP (default 80)
+  --https-port N         host port for HTTPS (default 443)
+  --set KEY=VALUE        set any .env value; repeatable (e.g. --set OPENSEARCH_HEAP=512m)
+
+  Database:
+  --import FILE          load this .sql or .sql.gz dump instead of installing
+  --from-env-php FILE    take the crypt key, install date, GraphQL salt, cache prefix, admin path
+                         and cache state from an existing env.php (needed with --import)
+
+  New project:
+  --mageos-version VER   Mage-OS version to create (default 3.6.0)
+  --hyva                 install Hyvä (the installer asks for, or reads, HYVA_PROJECT_KEY and
+                         HYVA_API_TOKEN: a free key from the hyva.io dashboard), then
+                         mage-os/module-worker-mode-hyva
+  --sample-data          install Magento's sample data
+  --locale CODE          store locale (default en_US)
+  --currency CODE        base currency (default USD)
+  --timezone ZONE        timezone (default UTC)
+
+  Answers to setup's questions, for running without a terminal:
+  --repair               a new project setup didn't finish: re-run the worker-mode step.
+                         A project without worker mode: add it.
+                         A failed install: clean it up (and, on a re-run, install again).
+  --recreate             a new project setup didn't finish: delete it and create it again.
+                         Never applies to a project setup didn't create.
+
+  --skip-windows        don't touch the Windows hosts file or trust store (bin/trust does that later)
+USAGE
+    exit 1
+}
+
+usage_server() {
+    cat >&2 <<'USAGE'
+deploy/setup server: a staging or production server, as root.
+
+It checks, and installs only if missing: Docker Engine with the compose and buildx plugins
+(from Docker's apt repository), vm.max_map_count, the deploy user, and ufw (SSH allowed
+before it's enabled). Then it fills .env, creates the data directories, generates the
+OpenSearch certificates, imports the database, and starts the stack as the blue colour.
+
+Run it from the project root on the server, e.g. /opt/<project>, with deploy/ inside it.
+
+Options:
+  --env staging|production   required
+  --root DIR             project root (default: the current directory)
+  --project NAME         PROJECT_NAME
+  --domain DOMAIN        STORE_DOMAIN, the public hostname
+  --aliases "A B"        hostnames that redirect to STORE_DOMAIN (e.g. "www.example.com")
+  --acme-email EMAIL     Let's Encrypt account email
+  --image IMAGE          the app image to run (e.g. user/mage-os-app:abc1234); needed the first time
+  --import FILE          load this .sql or .sql.gz dump; needed the first time
+  --from-env-php FILE    take the store's immutable values from its env.php (needed with --import)
+  --secrets FILE         start from a SOPS-encrypted .env (deploy/secrets/<env>.env); needs the age key
+  --deploy-user USER     the user CI deploys as (default deploy)
+  --deploy-key FILE      a public key to add to that user's authorized_keys
+  --stack-only           install nothing: check the prerequisites, list any that are missing, and
+                         set up only the stack. Doesn't need root, if you're in the docker group.
+  --no-firewall          leave the firewall alone
+  --set KEY=VALUE        set any .env value; repeatable
+USAGE
+    exit 1
+}
+
+# -----------------------------------------------------------------------------
+# Options
+# -----------------------------------------------------------------------------
+MODE=${1:-}
+[ $# -gt 0 ] && shift
+case "$MODE" in
+    dev|server) ;;
+    -h|--help|help|"") usage ;;
+    *) fail "unknown mode '$MODE': dev or server" ;;
+esac
+
+ROOT=$PWD
+PROJECT_OPT="" DOMAIN_OPT="" MAGENTO_ROOT_OPT="" HTTP_PORT_OPT="" HTTPS_PORT_OPT=""
+IMPORT="" FROM_ENV_PHP="" MAGEOS_VERSION=3.6.0 HYVA=0 SAMPLE=0 RESUME=""
+LOCALE=en_US CURRENCY=USD TIMEZONE=UTC SKIP_WINDOWS=0
+SERVER_ENV="" ALIASES_OPT="" ACME_OPT="" IMAGE_OPT="" SECRETS="" DEPLOY_USER=deploy DEPLOY_KEY=""
+STACK_ONLY=0 NO_FIREWALL=0
+SETS=()
+
+need_value() { [ $# -ge 2 ] && [ -n "$2" ] || fail "$1 needs a value"; }
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --root)            need_value "$@"; ROOT=$2; shift 2 ;;
+        --project)         need_value "$@"; PROJECT_OPT=$2; shift 2 ;;
+        --domain)          need_value "$@"; DOMAIN_OPT=$2; shift 2 ;;
+        --magento-root)    need_value "$@"; MAGENTO_ROOT_OPT=$2; shift 2 ;;
+        --http-port)       need_value "$@"; HTTP_PORT_OPT=$2; shift 2 ;;
+        --https-port)      need_value "$@"; HTTPS_PORT_OPT=$2; shift 2 ;;
+        --set)             need_value "$@"; SETS+=("$2"); shift 2 ;;
+        --import)          need_value "$@"; IMPORT=$(readlink -f "$2"); shift 2 ;;
+        --from-env-php)    need_value "$@"; FROM_ENV_PHP=$(readlink -f "$2"); shift 2 ;;
+        --mageos-version)  need_value "$@"; MAGEOS_VERSION=$2; shift 2 ;;
+        --hyva)            HYVA=1; shift ;;
+        --sample-data)     SAMPLE=1; shift ;;
+        --repair)          [ "$RESUME" = recreate ] && fail "--repair and --recreate are alternatives: pass one"; RESUME=repair; shift ;;
+        --recreate)        [ "$RESUME" = repair ] && fail "--repair and --recreate are alternatives: pass one"; RESUME=recreate; shift ;;
+        --locale)          need_value "$@"; LOCALE=$2; shift 2 ;;
+        --currency)        need_value "$@"; CURRENCY=$2; shift 2 ;;
+        --timezone)        need_value "$@"; TIMEZONE=$2; shift 2 ;;
+        --skip-windows)    SKIP_WINDOWS=1; shift ;;
+        --env)             need_value "$@"; SERVER_ENV=$2; shift 2 ;;
+        --aliases)         need_value "$@"; ALIASES_OPT=$2; shift 2 ;;
+        --acme-email)      need_value "$@"; ACME_OPT=$2; shift 2 ;;
+        --image)           need_value "$@"; IMAGE_OPT=$2; shift 2 ;;
+        --secrets)         need_value "$@"; SECRETS=$(readlink -f "$2"); shift 2 ;;
+        --deploy-user)     need_value "$@"; DEPLOY_USER=$2; shift 2 ;;
+        --deploy-key)      need_value "$@"; DEPLOY_KEY=$(readlink -f "$2"); shift 2 ;;
+        --stack-only)      STACK_ONLY=1; shift ;;
+        --no-firewall)     NO_FIREWALL=1; shift ;;
+        -h|--help)         if [ "$MODE" = dev ]; then usage_dev; else usage_server; fi ;;
+        *)                 fail "unknown option '$1' (deploy/setup $MODE --help)" ;;
+    esac
+done
+
+[ -d "$ROOT" ] || fail "--root $ROOT doesn't exist"
+STACK_ROOT=$(cd "$ROOT" && pwd)
+export STACK_ROOT STACK_ONLY NO_FIREWALL
+
+# shellcheck source=bin/_lib.sh
+. "$SETUP_DEPLOY_DIR/bin/_lib.sh"
+# shellcheck source=lib/env.sh
+. "$DEPLOY_DIR/lib/env.sh"
+# shellcheck source=lib/preflight.sh
+. "$DEPLOY_DIR/lib/preflight.sh"
+# shellcheck source=lib/opensearch.sh
+. "$DEPLOY_DIR/lib/opensearch.sh"
+# shellcheck source=lib/project.sh
+. "$DEPLOY_DIR/lib/project.sh"
+# shellcheck source=lib/install.sh
+. "$DEPLOY_DIR/lib/install.sh"
+# shellcheck source=lib/server.sh
+. "$DEPLOY_DIR/lib/server.sh"
+
+# -----------------------------------------------------------------------------
+# Steps shared by both modes
+# -----------------------------------------------------------------------------
+
+# The root's `bin` points at deploy/bin, so `bin/magento` etc. work from the root.
+link_bin() {
+    local target link="$STACK_ROOT/bin"
+    target=$(realpath --relative-to="$STACK_ROOT" "$DEPLOY_DIR/bin")
+    if [ -L "$link" ]; then
+        ln -sfn "$target" "$link"
+    elif [ -e "$link" ]; then
+        die "$link exists and isn't a link. The stack's wrappers need it: move it aside (an old bin/ directory?), then re-run setup."
+    else
+        ln -s "$target" "$link"
+        info "linked $link -> $target"
+    fi
+}
+
+# The derived name a fresh .env gets when --project isn't given: the root directory's
+# name, made to pass project()'s rule. Anything but a letter or digit becomes one
+# hyphen, and the result is trimmed to 41 characters.
+default_project_name() {
+    local name
+    name=$(printf '%s' "$(basename "$STACK_ROOT")" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-')
+    name=${name#-}
+    name=${name%-}
+    [ -n "$name" ] || name=shop
+    [[ "$name" =~ ^[a-z] ]] || name="p-$name"
+    name=${name:0:41}
+    name=${name%-}
+    printf '%s' "$name"
+}
+
+base_url() {
+    local port
+    port=$(env_get HTTPS_PORT 443)
+    if [ "$port" = "443" ]; then
+        printf 'https://%s/' "$(env_get STORE_DOMAIN)"
+    else
+        printf 'https://%s:%s/' "$(env_get STORE_DOMAIN)" "$port"
+    fi
+}
+
+installed() { [ -n "$(env_get CRYPT_KEY)" ] && [ -n "$(env_get INSTALL_DATE)" ]; }
+
+# -----------------------------------------------------------------------------
+# dev
+# -----------------------------------------------------------------------------
+setup_dev() {
+    local fresh_env=0 new_project=0 admin_password=""
+
+    [ -n "$SERVER_ENV$IMAGE_OPT$SECRETS" ] && die "--env, --image and --secrets are server options"
+    [ -n "$IMPORT" ] && [ -z "$FROM_ENV_PHP" ] && die "--import needs --from-env-php. Without the store's own crypt key, every encrypted config value in the dump is unreadable."
+
+    preflight_docker
+
+    [ -f "$ENV_FILE" ] || fresh_env=1
+    env_init
+    if [ -n "$PROJECT_OPT" ]; then
+        env_set PROJECT_NAME "$PROJECT_OPT"
+    elif [ "$fresh_env" = "1" ]; then
+        env_set PROJECT_NAME "$(default_project_name)"
+    fi
+    project >/dev/null   # validates the name
+    env_set STACK_ENV dev
+    if [ -n "$DOMAIN_OPT" ]; then
+        env_set STORE_DOMAIN "$DOMAIN_OPT"
+    elif [ "$fresh_env" = "1" ]; then
+        env_set STORE_DOMAIN "$(project).test"
+    fi
+    [ -n "$MAGENTO_ROOT_OPT" ] && env_set MAGENTO_ROOT "$MAGENTO_ROOT_OPT"
+    [ -n "$HTTP_PORT_OPT" ] && env_set HTTP_PORT "$HTTP_PORT_OPT"
+    [ -n "$HTTPS_PORT_OPT" ] && env_set HTTPS_PORT "$HTTPS_PORT_OPT"
+    env_default BIND_ADDRESS 127.0.0.1
+    env_default MAGE_MODE developer
+    # Always this machine's: the dev image's www-data takes them.
+    env_set HOST_UID "$(id -u)"
+    env_set HOST_GID "$(id -g)"
+    env_apply_sets "${SETS[@]}"
+    # The base URL follows the domain and port, unless you've set one yourself.
+    if [ -z "$(env_get MAGENTO_BASE_URL)" ] || [ -n "$DOMAIN_OPT$HTTPS_PORT_OPT" ]; then
+        env_set MAGENTO_BASE_URL "$(base_url)"
+    fi
+    env_generate_secrets
+    env_validate
+
+    preflight_max_map_count
+    link_bin
+
+    os_certs_ensure "$(id -u):$(id -g)"
+    "$STACK_ROOT/bin/render"
+    # The Magento root is the dev image's build context, so it must exist before the
+    # build, even empty for a new project. Created by you, never by a bind mount.
+    mkdir -p "$(magento_root)"
+    info "building the dev image and the OpenSearch image"
+    compose build "$(service app)" "$(service opensearch)"
+    os_hashes_ensure "$(project)-opensearch:$(env_get OPENSEARCH_TAG 3)"
+    "$STACK_ROOT/bin/render"
+
+    # A new project setup started and didn't finish (lib/project.sh has the state file)
+    # is repaired or recreated, and stays a new project, so --hyva and --sample-data
+    # still apply. With no files left in the root, it's simply created again.
+    local resume_step
+    resume_step=$(project_state_step)
+    if [ -n "$resume_step" ] && [ -n "$(ls -A "$(magento_root)")" ]; then
+        [ -n "$IMPORT" ] && die "$(magento_root) is a new project setup didn't finish, not a store's code. Leave --import out to finish it, or point --magento-root at the store."
+        project_resume "$resume_step" "$MAGEOS_VERSION" "$RESUME"
+        new_project=1
+    elif [ ! -f "$(magento_root)/composer.json" ]; then
+        [ -n "$IMPORT" ] && die "--import needs the store's code in $(magento_root). For a new project, leave --import out."
+        project_new "$MAGEOS_VERSION"
+        new_project=1
+    else
+        project_ensure_worker_mode "$RESUME"
+        if [ "$HYVA" = "1" ] || [ "$SAMPLE" = "1" ]; then
+            warn "--hyva and --sample-data apply to new projects only; ignoring them for the existing project"
+            HYVA=0 SAMPLE=0
+        fi
+    fi
+
+    [ -n "$FROM_ENV_PHP" ] && env_import_env_php "$(project)-app:dev" "$FROM_ENV_PHP"
+
+    info "starting the database, Valkey, RabbitMQ and OpenSearch (waiting until they're healthy)"
+    compose up -d --wait \
+        "$(service mariadb)" "$(service valkey-session)" "$(service valkey-cache)" \
+        "$(service rabbitmq)" "$(service opensearch)"
+    # OpenSearch reads its security files only once, when it creates its security index.
+    "$STACK_ROOT/bin/opensearch-security"
+
+    # A failed install that wasn't cleaned up (declined, no terminal, or Ctrl-C) is
+    # offered the clean-up first. Never once installed: then the database is the store's.
+    if ! installed && install_pending; then
+        install_offer_cleanup "a previous install in $(magento_root) failed and wasn't cleaned up." "$RESUME"
+    fi
+
+    if [ -n "$IMPORT" ]; then
+        install_import "$IMPORT"
+    elif ! installed; then
+        local tables
+        tables=$(db_table_count)
+        [ "$tables" = "0" ] \
+            || die "the database has $tables tables, but .env has no CRYPT_KEY or INSTALL_DATE. Pass --from-env-php with the env.php this database belongs to."
+        if [ "$HYVA" = "1" ] && { [ -z "${HYVA_PROJECT_KEY:-}" ] || [ -z "${HYVA_API_TOKEN:-}" ]; }; then
+            [ -t 0 ] || die "--hyva needs HYVA_PROJECT_KEY and HYVA_API_TOKEN (a free key from the hyva.io dashboard)"
+            read -r -p "Hyvä project name (Packagist key): " HYVA_PROJECT_KEY
+            read -r -s -p "Hyvä API token: " HYVA_API_TOKEN
+            echo
+            export HYVA_PROJECT_KEY HYVA_API_TOKEN
+        fi
+        admin_password=$(rand_admin_password)
+        install_preseed "$admin_password" "$SAMPLE" "$HYVA" "$LOCALE" "$CURRENCY" "$TIMEZONE"
+        install_handoff "$RESUME"
+        install_capture
+        [ "$HYVA" = "1" ] && [ "$new_project" = "1" ] && project_add_hyva_worker_mode
+    else
+        info "Magento is already installed (CRYPT_KEY and INSTALL_DATE are set)"
+    fi
+
+    info "starting the whole stack (waiting until it's healthy)"
+    compose up -d --wait
+    "$STACK_ROOT/bin/magento" setup:upgrade
+    "$STACK_ROOT/bin/magento" cache:flush
+    if [ -n "$IMPORT" ] || [ -n "$admin_password" ]; then
+        "$STACK_ROOT/bin/magento" indexer:reindex
+    fi
+    # Worker mode: the workers loaded their classes before setup:upgrade.
+    "$STACK_ROOT/bin/restart" app cron consumers
+
+    if is_wsl && [ "$SKIP_WINDOWS" = "0" ]; then
+        "$STACK_ROOT/bin/trust" || warn "bin/trust didn't finish; run it again later"
+    fi
+
+    summary_dev "$admin_password"
+}
+
+summary_dev() {
+    local admin_password=$1 domain url port search
+    domain=$(env_get STORE_DOMAIN)
+    url=$(env_get MAGENTO_BASE_URL)
+    port=$(env_get HTTPS_PORT 443)
+    if [ "$port" = "443" ]; then port=""; else port=":$port"; fi
+    if dev_profile_on search-ui; then
+        search="https://search.$domain$port/        (admin / OPENSEARCH_ADMIN_PASSWORD in .env)"
+    else
+        search="off: add search-ui to DEV_PROFILES in .env, then run bin/start"
+    fi
+    cat >&2 <<EOF
+
+==================================================================================
+ $(project) is running.
+
+ Store       $url
+ Admin       ${url}$(env_get ADMIN_FRONT_NAME admin)/
+EOF
+    if [ -n "$admin_password" ]; then
+        cat >&2 <<EOF
+             user admin, password $admin_password
+             Shown only now; it's stored nowhere. Note it, or reset it with
+             bin/magento admin:user:create.
+EOF
+    fi
+    cat >&2 <<EOF
+ Logs        https://logs.$domain$port/          (Dozzle; every Magento log too)
+ Mail        https://mail.$domain$port/          (Mailpit: all outgoing mail lands here)
+ Database    https://pma.$domain$port/           (phpMyAdmin)
+ RabbitMQ    https://mq.$domain$port/            (RABBITMQ_USER / RABBITMQ_PASSWORD in .env)
+ OpenSearch  $search
+
+ Day to day: bin/magento, bin/log, bin/status, bin/xdebug, bin/varnish, bin/watch.
+ Everything else is in deploy/README.md.
+==================================================================================
+EOF
+}
+
+# -----------------------------------------------------------------------------
+# server
+# -----------------------------------------------------------------------------
+setup_server() {
+    case "$SERVER_ENV" in
+        staging|production) ;;
+        "") die "--env staging|production is required" ;;
+        *) die "--env must be staging or production (got '$SERVER_ENV')" ;;
+    esac
+    [ -n "$IMPORT" ] && [ -z "$FROM_ENV_PHP" ] && die "--import needs --from-env-php (the store's crypt key)"
+    [ "$STACK_ONLY" = "1" ] || server_require_root
+
+    server_docker
+    server_sysctl
+    server_deploy_user "$DEPLOY_USER" "$DEPLOY_KEY"
+    server_firewall
+    server_report_unmet
+    preflight_docker
+
+    if [ ! -f "$ENV_FILE" ] && [ -n "$SECRETS" ]; then
+        info "creating .env from $SECRETS"
+        ( umask 077; "$DEPLOY_DIR/bin/secrets" decrypt-file "$SECRETS" > "$ENV_FILE" )
+    fi
+    env_init
+    [ -n "$PROJECT_OPT" ] && env_set PROJECT_NAME "$PROJECT_OPT"
+    project >/dev/null
+    env_set STACK_ENV "$SERVER_ENV"
+    [ -n "$DOMAIN_OPT" ] && env_set STORE_DOMAIN "$DOMAIN_OPT"
+    [ -n "$ALIASES_OPT" ] && env_set STORE_ALIASES "$ALIASES_OPT"
+    [ -n "$ACME_OPT" ] && env_set ACME_EMAIL "$ACME_OPT"
+    env_set BIND_ADDRESS 0.0.0.0
+    env_default HTTP_PORT 80
+    env_default HTTPS_PORT 443
+    env_set MAGE_MODE production
+    env_set DEV_PROFILES ""
+    env_default DATA_DIR "$STACK_ROOT/data"
+    env_default MARIADB_DATA "$(env_get DATA_DIR)/mysql"
+    env_default ACTIVE_COLOR blue
+    if [ -n "$IMAGE_OPT" ]; then
+        env_set "APP_IMAGE_$(env_get ACTIVE_COLOR blue | tr '[:lower:]' '[:upper:]')" "$IMAGE_OPT"
+        env_set APP_IMAGE_ACTIVE "$IMAGE_OPT"
+    fi
+    env_apply_sets "${SETS[@]}"
+    [ -n "$(env_get MAGENTO_BASE_URL)" ] || env_set MAGENTO_BASE_URL "$(base_url)"
+    [ -n "$(env_get ACME_EMAIL)" ] || die "ACME_EMAIL is empty: pass --acme-email (Let's Encrypt needs it)"
+    [ -n "$(env_get APP_IMAGE_ACTIVE)" ] || die "no app image yet: pass --image <image:tag> (CI builds it)"
+    env_generate_secrets
+    env_validate
+
+    server_data_dirs "$(env_get DATA_DIR)"
+    server_report_unmet
+    link_bin
+
+    os_certs_ensure "$OPENSEARCH_UID:$OPENSEARCH_UID"
+    "$STACK_ROOT/bin/render"
+    compose build "$(service opensearch)"
+    os_hashes_ensure "$(project)-opensearch:$(env_get OPENSEARCH_TAG 3)"
+    "$STACK_ROOT/bin/render"
+
+    info "pulling $(env_get APP_IMAGE_ACTIVE)"
+    docker pull "$(env_get APP_IMAGE_ACTIVE)"
+    [ -n "$FROM_ENV_PHP" ] && env_import_env_php "$(env_get APP_IMAGE_ACTIVE)" "$FROM_ENV_PHP"
+
+    compose up -d --wait \
+        "$(service mariadb)" "$(service valkey-session)" "$(service valkey-cache)" \
+        "$(service rabbitmq)" "$(service opensearch)"
+    # OpenSearch reads its security files only once, when it creates its security index.
+    "$STACK_ROOT/bin/opensearch-security"
+    if [ -n "$IMPORT" ]; then
+        install_import "$IMPORT"
+    fi
+    installed || die "no store yet. A server starts from an existing store: pass --import <dump> --from-env-php <env.php>."
+
+    info "starting the stack on the $(env_get ACTIVE_COLOR blue) colour (waiting until it's healthy)"
+    compose up -d --wait
+    "$STACK_ROOT/bin/magento" setup:upgrade --keep-generated
+    "$STACK_ROOT/bin/magento" cache:flush
+    [ -n "$IMPORT" ] && "$STACK_ROOT/bin/magento" indexer:reindex
+
+    smoke_server
+}
+
+smoke_server() {
+    local domain code
+    domain=$(env_get STORE_DOMAIN)
+    # Straight at the local Caddy, with the real hostname, so this tests this server
+    # rather than Cloudflare. -k: the Let's Encrypt certificate may still be on its way.
+    code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 30 \
+        --resolve "$domain:443:127.0.0.1" "https://$domain/" || echo 000)
+    case "$code" in
+        200|301|302) info "smoke check: https://$domain/ answered $code from this server" ;;
+        *) warn "smoke check: https://$domain/ answered $code. Look at bin/log app and bin/log varnish." ;;
+    esac
+}
+
+case "$MODE" in
+    dev)    setup_dev ;;
+    server) setup_server ;;
+esac

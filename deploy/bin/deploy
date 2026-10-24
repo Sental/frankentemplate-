@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# bin/deploy: the dev post-change sequence, stopping at the first failure.
+#   setup:upgrade, then setup:di:compile, then npm run build for every THEME_PATHS
+#   entry, then static content deploy for LOCALES, then cache flush and a restart of
+#   the PHP containers.
+# The restart matters in worker mode: workers keep classes in memory until restarted.
+# Servers don't use this; bin/release does the equivalent there.
+# shellcheck source=_lib.sh
+. "$(dirname "$0")/_lib.sh"
+
+require_dev
+bin=$(dirname "$0")
+
+"$bin/magento" setup:upgrade
+"$bin/magento" setup:di:compile
+for theme in $(env_get THEME_PATHS); do
+    NPM_DIR=$theme "$bin/npm" run build
+done
+# shellcheck disable=SC2046 # LOCALES is a space-separated list by design
+"$bin/magento" setup:static-content:deploy -f $(env_get LOCALES en_US)
+"$bin/cache-flush"
+"$bin/restart" app cron consumers
+info "done"

@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# bin/cache-flush: flushes Magento's caches, then bans everything in Varnish.
+# shellcheck source=_lib.sh
+. "$(dirname "$0")/_lib.sh"
+
+"$(dirname "$0")/magento" cache:flush
+compose exec -T "$(service varnish)" varnishadm "ban req.url ~ /"
+info "Magento caches flushed and Varnish banned"

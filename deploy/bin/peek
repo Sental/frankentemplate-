@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+#
+# Reads a file from inside the app container. Read-only by construction.
+#
+#   bin/peek var/log/system.log
+#   bin/peek --tail 50 var/log/exception.log
+#   bin/peek --grep 'catalog-storefront' var/log/system.log
+#   bin/peek --ls var/log
+#
+# Why it exists: `docker compose exec` is arbitrary execution, so it can't be safely
+# allowlisted. `exec app bash -c '...'` hides its payload inside a quoted string that
+# a permission pattern can't see into. This wrapper is the boundary instead: it takes
+# a path, rejects anything that could reach a shell, and runs one fixed read command.
+#
+# Paths are relative to the Magento root (/app in the container). Absolute paths,
+# `..` and shell metacharacters are refused.
+# shellcheck source=_lib.sh
+. "$(dirname "$0")/_lib.sh"
+
+usage() {
+    cat >&2 <<'USAGE'
+bin/peek: read a file from the app container.
+
+Usage:
+  bin/peek <path>                     the whole file
+  bin/peek --tail <n> <path>          the last n lines
+  bin/peek --head <n> <path>          the first n lines
+  bin/peek --grep <pattern> <path>    matching lines (a fixed string, not a regex)
+  bin/peek --ls <path>                a directory listing
+
+Paths are relative to the Magento root; no absolute paths, no "..".
+USAGE
+    exit 1
+}
+
+[ $# -eq 0 ] && usage
+
+MODE="cat"
+ARG=""
+case "${1:-}" in
+    --tail|--head) MODE="${1#--}"; ARG="${2:-}"; shift 2 || usage
+        [[ "$ARG" =~ ^[0-9]+$ ]] || die "--$MODE needs a number" ;;
+    --grep) MODE="grep"; ARG="${2:-}"; shift 2 || usage ;;
+    --ls) MODE="ls"; shift ;;
+    --*) usage ;;
+esac
+
+PATH_ARG="${1:-}"
+[ -n "$PATH_ARG" ] || usage
+
+# The point of the wrapper: nothing that could reach a shell, leave the tree, or expand.
+case "$PATH_ARG" in
+    /*|*..*) die "paths are relative to the Magento root and may not contain '..'" ;;
+esac
+if [[ "$PATH_ARG" =~ [^A-Za-z0-9._/-] ]]; then
+    die "the path may contain only letters, digits, dot, underscore, dash and slash"
+fi
+# The grep pattern never reaches a shell either (it's one argv entry to grep -F),
+# but keep it plain so a stray quote can't confuse a later reader.
+if [ "$MODE" = grep ] && [[ "$ARG" =~ [\'\"\`\$\\] ]]; then
+    die "the --grep pattern may not contain quotes, backticks, \$ or backslashes"
+fi
+
+TARGET="/app/$PATH_ARG"
+APP=$(app_service)
+case "$MODE" in
+    cat)   compose exec -T -u www-data "$APP" cat -- "$TARGET" ;;
+    tail)  compose exec -T -u www-data "$APP" tail -n "$ARG" -- "$TARGET" ;;
+    head)  compose exec -T -u www-data "$APP" head -n "$ARG" -- "$TARGET" ;;
+    grep)  compose exec -T -u www-data "$APP" grep -F -n -- "$ARG" "$TARGET" ;;
+    ls)    compose exec -T -u www-data "$APP" ls -la -- "$TARGET" ;;
+esac

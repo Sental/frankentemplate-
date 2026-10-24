@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# bin/varnish on | off | status   (dev)
+#   off     the store goes straight from Caddy to the app, bypassing Varnish: handy
+#           when debugging rendering without having to think about purges
+#   on      back through Varnish, as on the servers
+#   status  which one is in effect
+#
+# Only the dev Caddyfile changes. It's re-rendered, then reloaded without dropping
+# connections. Magento's own FPC setting stays on Varnish, so with the bypass on no
+# page is cached anywhere: you always see freshly rendered output.
+# shellcheck source=_lib.sh
+. "$(dirname "$0")/_lib.sh"
+
+require_dev
+reload() {
+    "$(dirname "$0")/render"
+    caddy_reload
+}
+case "${1:-status}" in
+    on)
+        env_set VARNISH_BYPASS 0
+        reload
+        info "store -> Varnish -> app"
+        ;;
+    off)
+        env_set VARNISH_BYPASS 1
+        reload
+        info "store -> app (Varnish bypassed)"
+        ;;
+    status)
+        if [ "$(env_get VARNISH_BYPASS 0)" = "1" ]; then echo "off (bypassed)"; else echo "on"; fi
+        ;;
+    *)
+        die "usage: bin/varnish on | off | status"
+        ;;
+esac

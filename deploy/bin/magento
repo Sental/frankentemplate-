@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# bin/magento <command> [args]: bin/magento in the app container, as www-data.
+#
+# Warns before commands whose effect won't survive. env.php is regenerated from .env
+# on every container start (FINDINGS F-12), so cache:enable/disable and
+# config:set --lock-env only last until the next restart. Change .env instead.
+# shellcheck source=_lib.sh
+. "$(dirname "$0")/_lib.sh"
+
+case "${1:-}" in
+    cache:enable|cache:disable)
+        warn "$1 lasts only until the next container start. env.php is regenerated from .env;"
+        warn "for a lasting change, edit MAGENTO_CACHE_DISABLED in .env, then bin/start app cron consumers"
+        ;;
+esac
+for arg in "$@"; do
+    if [ "$arg" = "--lock-env" ]; then
+        warn "--lock-env writes env.php, which is regenerated from .env on the next container start, so this value won't last"
+        break
+    fi
+done
+
+php_exec php bin/magento "$@"

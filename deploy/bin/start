@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# bin/start [service...] [compose up flags]
+# Renders the templates, then starts the stack, or just the named services, in the
+# background. Short names work: `bin/start app cron`. Then reloads Caddy, which never
+# notices a re-rendered Caddyfile by itself (DEV_PROFILES, STORE_ALIASES, ...).
+# shellcheck source=_lib.sh
+. "$(dirname "$0")/_lib.sh"
+
+"$(dirname "$0")/render"
+map_args "$@"
+compose up -d "${MAPPED[@]}"
+caddy_reload

@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# bin/watch on | off | status   (dev)
+#   on      FrankenPHP restarts its workers whenever a file under app/code
+#           (*.php, *.xml), app/etc (*.php) or vendor/composer/installed.json changes.
+#           Worker mode stays on, as in production; you just stop restarting by hand.
+#   off     workers keep their code until `bin/restart app`
+#   status  the setting the running app started with
+#
+# MAX_REQUESTS in .env still applies, for the 1-request and 3-request parity gates.
+# shellcheck source=_lib.sh
+. "$(dirname "$0")/_lib.sh"
+
+require_dev
+case "${1:-status}" in
+    on)
+        env_set FRANKENPHP_WATCH 1
+        compose up -d "$(service app)"
+        info "watch on"
+        ;;
+    off)
+        env_set FRANKENPHP_WATCH 0
+        compose up -d "$(service app)"
+        info "watch off: bin/restart app after PHP changes"
+        ;;
+    status)
+        compose exec -T "$(service app)" printenv FRANKENPHP_WATCH || true
+        ;;
+    *)
+        die "usage: bin/watch on | off | status"
+        ;;
+esac

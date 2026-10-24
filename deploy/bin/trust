@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# bin/trust   (dev, from WSL)
+# Makes the Windows browser reach and trust the dev stack, behind one UAC prompt:
+#   - adds a marked block to the Windows hosts file mapping STORE_DOMAIN and the
+#     tool subdomains to 127.0.0.1. The block is replaced on every run, never
+#     duplicated, and nothing outside it is touched.
+#   - imports Caddy's local root CA into Windows' LocalMachine\Root store, skipped
+#     if that exact certificate is already there.
+# If UAC is declined, or this isn't WSL, it prints the lines and commands to apply
+# by hand.
+#
+# Firefox keeps its own certificate store. Set security.enterprise_roots.enabled to
+# true in about:config so it trusts Windows' store.
+# shellcheck source=_lib.sh
+. "$(dirname "$0")/_lib.sh"
+
+require_dev
+project=$(project)
+domain=$(env_get STORE_DOMAIN)
+[[ "$domain" =~ ^[A-Za-z0-9.-]+$ ]] || die "STORE_DOMAIN must be a plain hostname (got '$domain')"
+names="$domain logs.$domain mail.$domain pma.$domain mq.$domain search.$domain"
+hosts_line="127.0.0.1 $names"
+begin="# >>> stack:$project (managed by bin/trust; anything inside this block is replaced)"
+end="# <<< stack:$project"
+
+manual() {
+    cat >&2 <<EOF
+
+Apply these by hand.
+
+1. Add this block to C:\\Windows\\System32\\drivers\\etc\\hosts (as Administrator):
+$begin
+$hosts_line
+$end
+
+2. Trust Caddy's root CA. In an Administrator PowerShell:
+   Import-Certificate -FilePath <path to root.crt> -CertStoreLocation Cert:\\LocalMachine\\Root
+   Get the file with: bin/status, then
+   docker cp ${project}-caddy:/data/caddy/pki/authorities/local/root.crt ./root.crt
+EOF
+    exit 1
+}
+
+command -v powershell.exe >/dev/null 2>&1 || { warn "powershell.exe not found: not running under WSL"; manual; }
+command -v wslpath >/dev/null 2>&1 || { warn "wslpath not found"; manual; }
+
+# Caddy creates its CA the first time it starts.
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+compose cp "$(service caddy):/data/caddy/pki/authorities/local/root.crt" "$work/root.crt" >/dev/null \
+    || die "couldn't copy Caddy's root CA. Is the stack running? (bin/start)"
+thumb=$(openssl x509 -in "$work/root.crt" -noout -fingerprint -sha1 | cut -d= -f2 | tr -d ':')
+
+win_tmp=$(powershell.exe -NoProfile -NonInteractive -Command '[System.IO.Path]::GetTempPath()' | tr -d '\r')
+wsl_tmp=$(wslpath -u "$win_tmp")
+cert_win="${win_tmp}stack-${project}-root.crt"
+script_win="${win_tmp}stack-${project}-trust.ps1"
+cp "$work/root.crt" "$wsl_tmp/stack-${project}-root.crt"
+
+cat > "$wsl_tmp/stack-${project}-trust.ps1" <<EOF
+\$ErrorActionPreference = 'Stop'
+\$hostsPath = Join-Path \$env:SystemRoot 'System32\\drivers\\etc\\hosts'
+\$begin = '$begin'
+\$end = '$end'
+\$kept = New-Object System.Collections.Generic.List[string]
+\$inside = \$false
+foreach (\$line in @(Get-Content -LiteralPath \$hostsPath)) {
+    if (\$line -eq \$begin) { \$inside = \$true; continue }
+    if (\$line -eq \$end) { \$inside = \$false; continue }
+    if (-not \$inside) { \$kept.Add(\$line) }
+}
+\$kept.Add(\$begin)
+\$kept.Add('$hosts_line')
+\$kept.Add(\$end)
+Set-Content -LiteralPath \$hostsPath -Value \$kept -Encoding ASCII
+if (-not (Test-Path 'Cert:\\LocalMachine\\Root\\$thumb')) {
+    Import-Certificate -FilePath '$cert_win' -CertStoreLocation Cert:\\LocalMachine\\Root | Out-Null
+}
+EOF
+
+info "asking Windows for elevation (one UAC prompt) to update the hosts file and trust Caddy's CA"
+if ! powershell.exe -NoProfile -NonInteractive -Command \
+    "Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','$script_win'" ; then
+    warn "elevation was declined or failed"
+    manual
+fi
+rm -f "$wsl_tmp/stack-${project}-trust.ps1" "$wsl_tmp/stack-${project}-root.crt"
+
+# Check the result, rather than trusting the exit status of an elevated process we
+# can't see into.
+ok=1
+if ! grep -qF "$hosts_line" /mnt/c/Windows/System32/drivers/etc/hosts 2>/dev/null; then
+    warn "the hosts block isn't in the Windows hosts file"
+    ok=0
+fi
+present=$(powershell.exe -NoProfile -NonInteractive -Command "Test-Path 'Cert:\\LocalMachine\\Root\\$thumb'" | tr -d '\r')
+if [ "$present" != "True" ]; then
+    warn "Caddy's CA ($thumb) isn't in LocalMachine\\Root"
+    ok=0
+fi
+[ "$ok" = "1" ] || manual
+info "Windows now resolves $domain and its tool subdomains to 127.0.0.1, and trusts the dev CA (SHA-1 $thumb)"

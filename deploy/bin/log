@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# bin/log [service...]
+# Follows container logs. Defaults to the app. Short names work: `bin/log varnish caddy`.
+# In dev, `bin/log log-tailer` streams every Magento log file; Dozzle shows the same
+# at https://logs.<STORE_DOMAIN>/.
+# TAIL=n sets how many earlier lines to show first (default 200).
+# shellcheck source=_lib.sh
+. "$(dirname "$0")/_lib.sh"
+
+if [ $# -eq 0 ]; then set -- app; fi
+map_args "$@"
+compose logs -f --tail="${TAIL:-200}" "${MAPPED[@]}"

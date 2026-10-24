@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# bin/consumers list | status | restart
+#   list     every consumer the installed modules declare, marked with whether
+#            MAGENTO_CONSUMERS runs it. Configured names that nothing declares are
+#            flagged: Supervisor would retry them until it gives up.
+#   status   Supervisor's view of the running consumers
+#   restart  recreates the consumers container, so .env changes take effect
+#
+# A consumer that was missing from the list used to need an image rebuild; now it's
+# one line in .env and `bin/consumers restart` (FINDINGS F-24).
+# shellcheck source=_lib.sh
+. "$(dirname "$0")/_lib.sh"
+
+case "${1:-list}" in
+    list)
+        configured=",$(env_get MAGENTO_CONSUMERS | tr -d '[:space:]'),"
+        available=$(php_exec php bin/magento queue:consumers:list | tr -d '\r')
+        while IFS= read -r name; do
+            [ -n "$name" ] || continue
+            if [[ "$configured" == *",$name,"* ]]; then
+                printf '[x] %s\n' "$name"
+            else
+                printf '[ ] %s\n' "$name"
+            fi
+        done <<< "$available"
+        IFS=',' read -r -a wanted <<< "$(env_get MAGENTO_CONSUMERS | tr -d '[:space:]')"
+        for name in "${wanted[@]}"; do
+            [ -n "$name" ] || continue
+            if ! grep -qx -- "$name" <<< "$available"; then
+                printf '[!] %s   configured in MAGENTO_CONSUMERS, but no installed module declares it\n' "$name"
+            fi
+        done
+        ;;
+    status)
+        compose exec -T "$(service consumers)" supervisorctl -c /tmp/supervisord.conf status
+        ;;
+    restart)
+        compose up -d --force-recreate "$(service consumers)"
+        ;;
+    *)
+        die "usage: bin/consumers list | status | restart"
+        ;;
+esac

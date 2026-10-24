@@ -1,0 +1,37 @@
+# MariaDB tuning for Magento, mounted read-only at /etc/mysql/conf.d/.
+# The buffer pool size isn't set here: it varies by machine, so compose passes it as
+# --innodb-buffer-pool-size=${MARIADB_BUFFER_POOL} from .env.
+
+[mysqld]
+
+# --- Character set ---
+character-set-server  = utf8mb4
+collation-server      = utf8mb4_unicode_ci
+
+# --- InnoDB ---
+# innodb_buffer_pool_instances is deliberately absent: deprecated since MariaDB 10.5,
+# which uses a single buffer pool (FINDINGS F-36).
+innodb_log_file_size            = 256M
+# 2 flushes the log once a second instead of on every commit. Safe on a single server
+# with journaled storage; set 1 for strict durability.
+innodb_flush_log_at_trx_commit  = 2
+innodb_flush_method             = O_DIRECT
+innodb_file_per_table           = 1
+
+# --- Connections ---
+max_connections       = 100
+wait_timeout          = 300
+interactive_timeout   = 300
+
+# --- Query cache: off, as Magento recommends ---
+query_cache_type = 0
+query_cache_size = 0
+
+# --- Slow query log, for spotting N+1 queries ---
+slow_query_log        = 1
+slow_query_log_file   = /var/lib/mysql/slow.log
+long_query_time       = 2
+
+# --- Temporary tables ---
+tmp_table_size        = 64M
+max_heap_table_size   = 64M

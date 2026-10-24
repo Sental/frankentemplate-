@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# bin/mysql [mariadb args]: the MariaDB client, as the Magento user, on Magento's database.
+#   bin/mysql                          interactive shell
+#   bin/mysql -e 'SELECT 1'            one statement (arguments are passed through)
+#   bin/mysql < dump.sql               import
+#   gunzip < dump.sql.gz | bin/mysql   compressed import
+#   bin/mysql <<'SQL'                  a heredoc
+#   SELECT ...;
+#   SQL
+# shellcheck source=_lib.sh
+. "$(dirname "$0")/_lib.sh"
+
+tty=$(tty_flag)
+# shellcheck disable=SC2086,SC2016 # $tty is empty or -T; the inner $ variables expand in the container
+compose exec $tty "$(service mariadb)" \
+    sh -c 'exec mariadb -u"$MARIADB_USER" -p"$MARIADB_PASSWORD" "$MARIADB_DATABASE" "$@"' sh "$@"
