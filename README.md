@@ -3,9 +3,9 @@
 A Docker stack that runs Mage-OS (or Magento Open Source) on FrankenPHP in worker mode, from a dev
 machine to blue/green production servers. One command sets it up: `deploy/setup`.
 
-> **Status: pre-release.** The dev path is tested on WSL2 with a new Mage-OS 3.6 project. `--hyva`,
-> `--sample-data` and server mode are still being tested, and CI and blue/green releases are still being
-> built.
+> **Status: pre-release.** The dev path, `--hyva` and `--sample-data` are tested on WSL2 with a new
+> Mage-OS 3.6 project. Mage-OS 4.0, now the default, and server mode are still being tested, and CI and
+> blue/green releases are still being built.
 
 ## What you get
 
@@ -44,7 +44,7 @@ deploy/setup dev --project myshop
 
 That does four things:
 
-1. **Creates the project.** A Mage-OS 3.6.0 project goes in `src/`, ready for worker mode: the opengento
+1. **Creates the project.** A Mage-OS 4.0.0 project goes in `src/`, ready for worker mode: the opengento
    FrankenPHP packages, `mage-os/module-worker-mode` and one patch, described in
    [deploy/patches](deploy/patches/README.md).
 2. **Hands over to Mage-OS's installer** (`bin/magento install`), with the stack's database, search,
@@ -61,9 +61,9 @@ Useful options (all of them: `deploy/setup dev --help`):
 | --- | --- |
 | `--domain shop.test` | the dev domain; the default is `<project>.test` |
 | `--http-port 8080 --https-port 8443` | when 80 and 443 are taken |
-| `--hyva` | install Hyvä, then `mage-os/module-worker-mode-hyva`. It needs a free key from hyva.io. |
-| `--sample-data` | install Magento's sample data |
-| `--mageos-version 3.6.0` | the Mage-OS version to create |
+| `--hyva` | Hyvä, with `mage-os/module-worker-mode-hyva`. setup requires both before the installer runs, and the installer activates the theme. It needs a free key from hyva.io. |
+| `--sample-data` | Magento's sample data. setup deploys it before the installer runs, so `setup:install` installs it. |
+| `--mageos-version 3.6.0` | the Mage-OS version to create; the default is 4.0.0 |
 | `--set KEY=VALUE` | any `.env` value; repeatable |
 
 The project name becomes part of every container name and hostname (`myshop-app`, `myshop-mariadb`, …).

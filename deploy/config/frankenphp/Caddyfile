@@ -9,6 +9,13 @@
 # pub/index.php, static.php and get.php are opengento's worker entry points,
 # installed by opengento/magento2-frankenphp-base.
 #
+# Each worker's thread count (num) comes from FRANKENPHP_WEB_WORKERS,
+# FRANKENPHP_STATIC_WORKERS and FRANKENPHP_MEDIA_WORKERS in .env, which setup fills
+# per mode. Without num, FrankenPHP starts 2 threads per CPU for every worker: 96
+# Magento boots on 16 CPUs, about five minutes on a cold first start, and more memory
+# than a server's APP_MEM_LIMIT allows. Every thread boots its own Magento, so count
+# memory as opcache plus threads times what each one settles at.
+#
 # Each worker block ends with the FRANKENPHP_WORKER_EXTRA placeholder. It's empty
 # unless FRANKENPHP_WATCH=1 (dev); the entrypoint then fills it with
 # `watch <glob>` lines, so workers restart when code changes.
@@ -32,18 +39,21 @@
 		worker {
 			file /app/pub/static.php
 			name static-worker
+			num {$FRANKENPHP_STATIC_WORKERS}
 			{$FRANKENPHP_WORKER_EXTRA}
 		}
 
 		worker {
 			file /app/pub/get.php
 			name media-worker
+			num {$FRANKENPHP_MEDIA_WORKERS}
 			{$FRANKENPHP_WORKER_EXTRA}
 		}
 
 		worker {
 			file /app/pub/index.php
 			name web-worker
+			num {$FRANKENPHP_WEB_WORKERS}
 			{$FRANKENPHP_WORKER_EXTRA}
 		}
 	}

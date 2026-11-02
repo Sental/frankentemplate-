@@ -103,6 +103,13 @@ On a dev machine, what setup does depends on what it finds:
   values. `bin/restart` keeps the old ones.
 - **Rendered files** (the Caddyfile, the VCL, the compose files) change only through `bin/render`, and
   `bin/start` renders. Caddy never notices a new Caddyfile by itself, so `bin/start` also reloads it.
+- **Worker threads and memory.** `FRANKENPHP_WEB_WORKERS`, `FRANKENPHP_STATIC_WORKERS` and
+  `FRANKENPHP_MEDIA_WORKERS` set how many PHP threads each FrankenPHP worker runs. setup writes 4/4/2 in
+  dev and 8/4/2 on servers. Every thread boots its own Magento, so these set both the first-start time and
+  the app's memory.
+  - **On servers,** `APP_MEM_LIMIT` (for each app colour), `CRON_MEM_LIMIT` and `CONSUMERS_MEM_LIMIT` cap
+    the containers. `setup server` warns when the caps add up to more than the host's RAM during a release.
+  - `.env.example` has the sizing rule.
 
 ## Dev URLs
 
@@ -149,6 +156,13 @@ through Dashboards or the security REST API is reverted on the next setup run.
   wrote (and restores the previous one), drops and recreates the database it filled, and turns
   maintenance mode off. If you say no, or setup never got to ask, the next run asks first. Without a
   terminal, `--repair` answers yes.
+- **An installer step timed out** ("exceeded the timeout of 30 seconds"): the installer gives its
+  post-install steps fixed time limits, and a timeout stops the whole install, even though
+  `setup:install` has finished. `var/log/stack-install-timing.log`, in the Magento root, has one
+  section per installer run. It shows when each step started and ended. For each step it also logs, every
+  2 s, whether the step was on a CPU (state `R`), waiting on the disk (`D`) or waiting on something else
+  (`S`), its CPU time and I/O, and the machine's load and pressure. If the installer ran as a user other
+  than www-data or root, the log and the terminal say so.
 - **`search.` shows a 503:** Dashboards is off (`DEV_PROFILES`).
 - **`search.` shows a 502 with a message:** it's on but not answering yet. Try `bin/status` and
   `bin/log opensearch-dashboards`.

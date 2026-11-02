@@ -5,10 +5,17 @@
 # Composer runs in a one-off dev app container, never on the host.
 # =============================================================================
 
-# project_container_step STEP [ARGS]: runs one step of new-project.container.sh in a
-# one-off dev app container, as www-data, with /app = MAGENTO_ROOT.
+# project_container_step [-e NAME]... STEP [ARGS]: runs one step of
+# new-project.container.sh in a one-off dev app container, as www-data, with
+# /app = MAGENTO_ROOT. Each -e NAME passes that variable from setup's environment by
+# name, so its value never appears on a command line or in a process list.
 project_container_step() {
-    compose run --rm --no-deps -T "$(service app)" bash -s -- "$@" \
+    local -a env=()
+    while [ "${1:-}" = "-e" ]; do
+        env+=(-e "$2")
+        shift 2
+    done
+    compose run --rm --no-deps -T "${env[@]}" "$(service app)" bash -s -- "$@" \
         < "$DEPLOY_DIR/lib/new-project.container.sh"
 }
 
@@ -220,8 +227,25 @@ project_ensure_worker_mode() {
     project_curate
 }
 
-# project_add_hyva_worker_mode: after the installer has installed Hyvä.
-project_add_hyva_worker_mode() {
-    info "adding mage-os/module-worker-mode-hyva"
-    project_container_step hyva
+# project_require_hyva: requires Hyvä and mage-os/module-worker-mode-hyva before the
+# installer runs, so setup:install enables Hyvä, Mollie (which Hyvä brings) and
+# MageOS_WorkerModeHyva from its first bootstrap. Left to the installer, Hyvä was
+# required inside the installer's own process, after it had loaded its module list,
+# and the worker-mode module came after the install. Both then waited for a later
+# setup:upgrade, and the sample data met classes generated without them (Mollie's
+# CartExtension methods). Safe to run again: a retry changes nothing.
+project_require_hyva() {
+    info "requiring Hyvä and mage-os/module-worker-mode-hyva before the installer"
+    project_container_step -e HYVA_PROJECT_KEY -e HYVA_API_TOKEN hyva
+}
+
+# project_require_sample_data: deploys the sample data before the installer runs, so
+# setup:install installs it. Left to the installer, the deploy ran inside its own
+# process, and that process's setup:upgrade installed nothing (the new modules weren't
+# registered there). The sample data then installed at setup's later setup:upgrade,
+# after the installer had applied the theme, and Magento_ThemeSampleData's installer
+# assigned Magento/luma over Hyvä. Safe to run again: a retry changes nothing.
+project_require_sample_data() {
+    info "deploying the sample data before the installer"
+    project_container_step sample-data
 }

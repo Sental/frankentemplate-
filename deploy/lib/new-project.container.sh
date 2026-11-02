@@ -18,8 +18,13 @@
 #                       - mage-os/module-worker-mode: Magento's worker-mode fixes
 #                     plus laravel/prompts, which `bin/magento install` needs, if the
 #                     project doesn't already have it.
-#   hyva              adds mage-os/module-worker-mode-hyva, once the installer has
-#                     installed Hyvä
+#   hyva              requires Hyvä (hyva-themes/magento2-default-theme) and
+#                     mage-os/module-worker-mode-hyva, with HYVA_PROJECT_KEY and
+#                     HYVA_API_TOKEN from the environment. setup runs it before the
+#                     installer, so the installer's own require is a no-op.
+#   sample-data       deploys Magento's sample data (sampledata:deploy). setup runs it
+#                     before the installer, so setup:install installs it and the
+#                     installer's own deploy finds nothing left to add.
 #
 # Composer runs here, never on the host.
 # =============================================================================
@@ -127,18 +132,41 @@ case "$step" in
         ;;
 
     hyva)
-        if [ ! -d vendor/hyva-themes/magento2-theme-module ]; then
-            echo "hyva: Hyvä isn't installed (vendor/hyva-themes/magento2-theme-module is missing)." >&2
-            echo "hyva: mage-os/module-worker-mode-hyva requires it. Install Hyvä first:" >&2
-            echo "hyva:   bin/composer require hyva-themes/magento2-default-theme" >&2
-            echo "hyva: with your free Packagist key from the hyva.io dashboard, then re-run setup with --hyva." >&2
-            exit 1
-        fi
-        composer require --no-interaction "mage-os/module-worker-mode-hyva:^1.0"
+        : "${HYVA_PROJECT_KEY:?hyva: HYVA_PROJECT_KEY is empty (a free key from the hyva.io dashboard)}"
+        : "${HYVA_API_TOKEN:?hyva: HYVA_API_TOKEN is empty (a free key from the hyva.io dashboard)}"
+
+        # The credentials reach auth.json from the environment through PHP, never as
+        # command-line arguments. Other entries in auth.json are kept, and the file is
+        # 0600 because it holds a token. The repository uses the installer's own name
+        # and URL, so when its theme step runs it finds both and adds nothing.
+        # shellcheck disable=SC2016 # PHP code: its $variables must reach PHP unexpanded
+        php -r '
+            $file = "auth.json";
+            $auth = is_file($file) ? json_decode(file_get_contents($file), true, 512, JSON_THROW_ON_ERROR) : [];
+            $auth["http-basic"]["hyva-themes.repo.packagist.com"] = [
+                "username" => getenv("HYVA_PROJECT_KEY"),
+                "password" => getenv("HYVA_API_TOKEN"),
+            ];
+            umask(0077);
+            file_put_contents($file, json_encode($auth, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
+            chmod($file, 0600);
+        '
+        composer config --no-interaction repositories.private-packagist composer \
+            "https://hyva-themes.repo.packagist.com/${HYVA_PROJECT_KEY}/"
+        composer require --no-interaction hyva-themes/magento2-default-theme "mage-os/module-worker-mode-hyva:^1.0"
+        ;;
+
+    sample-data)
+        # Magento's own deploy, which works before an install (it registers through
+        # cli_commands.php): it requires the sample-data package of every installed
+        # module that suggests one. It exits non-zero if Composer fails (composer.json is
+        # reverted) and if no module suggests sample data. Run again, the require changes
+        # nothing.
+        php bin/magento sampledata:deploy --no-interaction
         ;;
 
     *)
-        echo "new-project.container.sh: unknown step '$step' (create, check, guard, curate or hyva)" >&2
+        echo "new-project.container.sh: unknown step '$step' (create, check, guard, curate, hyva or sample-data)" >&2
         exit 2
         ;;
 esac

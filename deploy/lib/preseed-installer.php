@@ -84,9 +84,14 @@ $config = [
         'virtualHost' => $env('PRESEED_AMQP_VHOST', '/'),
     ],
     'logging' => ['debugMode' => false, 'logLevel' => 'error'],
+    // setup has already deployed the sample data (project_require_sample_data), so
+    // setup:install installs it, and the installer's own sample-data stage finds nothing
+    // left to add. The flag stays set, so the installer still shows and confirms it.
     'sampleData' => ['install' => $flag('PRESEED_SAMPLE_DATA')],
-    // Hyvä is installed by the installer's own theme stage, before setup:install, with
-    // the free access key from the hyva.io dashboard. Without --hyva the store uses Luma.
+    // setup has already required Hyvä before the installer (project_require_hyva), so the
+    // theme stage's own composer require is a no-op. `install: true` still matters:
+    // the installer's post-install stage applies the theme only when it's set. The key
+    // and token are passed so that stage's path stays clean. Without --hyva: Luma.
     'theme' => [
         'install' => $hyva,
         'theme' => $hyva ? 'hyva' : 'luma',

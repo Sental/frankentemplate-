@@ -5,6 +5,8 @@
 # =============================================================================
 
 readonly MIN_COMPOSE_VERSION=2.24.0
+# The app's health check uses start_interval, which needs Engine API 1.44 (Engine 25).
+readonly MIN_ENGINE_VERSION=25.0.0
 
 version_ge() { [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n1)" = "$2" ]; }
 
@@ -16,6 +18,9 @@ preflight_docker() {
     docker info >/dev/null 2>&1 \
         || die "can't reach the Docker daemon: is Docker running, and is $(id -un) in the docker group?"
     local v
+    v=$(docker version --format '{{.Server.Version}}' 2>/dev/null) || die "can't read the Docker Engine version (docker version)"
+    version_ge "$v" "$MIN_ENGINE_VERSION" \
+        || die "Docker Engine $v is too old: $MIN_ENGINE_VERSION or newer is needed (the app health check's start_interval)"
     v=$(docker compose version --short 2>/dev/null) || die "the docker compose plugin isn't installed"
     version_ge "${v#v}" "$MIN_COMPOSE_VERSION" \
         || die "docker compose $v is too old: $MIN_COMPOSE_VERSION or newer is needed (depends_on restart, scale: 0)"

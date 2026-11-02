@@ -104,12 +104,21 @@ EOF
 # install_handoff CHOICE: the interactive installer. The resume file holds passwords, so
 # it's removed afterwards whatever happens; a re-run of setup writes a fresh one. When
 # the installer fails, it offers the clean-up (CHOICE repair answers yes).
+#
+# install-timing.container.sh runs the installer and logs how long each of its steps
+# took, and what each was doing, to var/log/stack-install-timing.log (one section per
+# run). The installer's post-install steps have fixed timeouts, and the log is what
+# shows why a step ran out of time.
 install_handoff() {
     local choice=${1:-} status=0
     install_pending_begin
     install_guidance
-    compose run --rm --no-deps "$(service app)" php bin/magento install || status=$?
+    compose run --rm --no-deps \
+        -v "$DEPLOY_DIR/lib/install-timing.container.sh:/tmp/install-timing.sh:ro" \
+        "$(service app)" bash /tmp/install-timing.sh var/log/stack-install-timing.log \
+        php bin/magento install || status=$?
     rm -f "$(resume_file)"
+    info "the installer's steps are timed in $(magento_root)/var/log/stack-install-timing.log"
     if [ "$status" -ne 0 ]; then
         install_offer_cleanup "the install has failed (exit $status); its output is above." "$choice"
         die "cleaned up. Fix what the installer reported, then re-run the same deploy/setup command: it starts the installer again."
@@ -191,7 +200,8 @@ install_offer_cleanup() {
     [ ${#undo[@]} -gt 0 ] || undo+=("  - nothing to undo: no env.php, the database is empty, maintenance is off")
 
     warn "$context"
-    printf '%s\n' "Clean up, to prepare for a retry? This puts things back as they were before the installer ran:" "${undo[@]}" >&2
+    printf '%s\n' "Clean up, to prepare for a retry? This undoes what the failed install did:" "${undo[@]}" \
+        "  Composer packages are kept (the ones setup required for --hyva and --sample-data, and any the installer added): a retry reuses them." >&2
     if [ "$choice" != repair ]; then
         [ -t 0 ] || die "nothing has been cleaned up. Re-run deploy/setup in a terminal to be asked, or with --repair to clean up and retry."
         read -r -p "Clean up? [Y/n] " answer

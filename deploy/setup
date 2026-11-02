@@ -63,11 +63,16 @@ Options:
                          and cache state from an existing env.php (needed with --import)
 
   New project:
-  --mageos-version VER   Mage-OS version to create (default 3.6.0)
-  --hyva                 install Hyvä (the installer asks for, or reads, HYVA_PROJECT_KEY and
-                         HYVA_API_TOKEN: a free key from the hyva.io dashboard), then
-                         mage-os/module-worker-mode-hyva
-  --sample-data          install Magento's sample data
+  --mageos-version VER   Mage-OS version to create (default 4.0.0)
+
+  Installer (whenever it runs: a new project, a retry after a failed install, or a
+  project with an empty database; ignored with --import or once installed):
+  --hyva                 Hyvä: setup asks for, or reads, HYVA_PROJECT_KEY and HYVA_API_TOKEN
+                         (a free key from the hyva.io dashboard), requires Hyvä and
+                         mage-os/module-worker-mode-hyva before the installer, and the
+                         installer then activates the theme
+  --sample-data          Magento's sample data: setup deploys it before the installer,
+                         so setup:install installs it
   --locale CODE          store locale (default en_US)
   --currency CODE        base currency (default USD)
   --timezone ZONE        timezone (default UTC)
@@ -129,7 +134,7 @@ esac
 
 ROOT=$PWD
 PROJECT_OPT="" DOMAIN_OPT="" MAGENTO_ROOT_OPT="" HTTP_PORT_OPT="" HTTPS_PORT_OPT=""
-IMPORT="" FROM_ENV_PHP="" MAGEOS_VERSION=3.6.0 HYVA=0 SAMPLE=0 RESUME=""
+IMPORT="" FROM_ENV_PHP="" MAGEOS_VERSION=4.0.0 HYVA=0 SAMPLE=0 RESUME=""
 LOCALE=en_US CURRENCY=USD TIMEZONE=UTC SKIP_WINDOWS=0
 SERVER_ENV="" ALIASES_OPT="" ACME_OPT="" IMAGE_OPT="" SECRETS="" DEPLOY_USER=deploy DEPLOY_KEY=""
 STACK_ONLY=0 NO_FIREWALL=0
@@ -239,7 +244,7 @@ installed() { [ -n "$(env_get CRYPT_KEY)" ] && [ -n "$(env_get INSTALL_DATE)" ];
 # dev
 # -----------------------------------------------------------------------------
 setup_dev() {
-    local fresh_env=0 new_project=0 admin_password=""
+    local fresh_env=0 admin_password=""
 
     [ -n "$SERVER_ENV$IMAGE_OPT$SECRETS" ] && die "--env, --image and --secrets are server options"
     [ -n "$IMPORT" ] && [ -z "$FROM_ENV_PHP" ] && die "--import needs --from-env-php. Without the store's own crypt key, every encrypted config value in the dump is unreadable."
@@ -265,6 +270,11 @@ setup_dev() {
     [ -n "$HTTPS_PORT_OPT" ] && env_set HTTPS_PORT "$HTTPS_PORT_OPT"
     env_default BIND_ADDRESS 127.0.0.1
     env_default MAGE_MODE developer
+    # FrankenPHP threads (.env.example has the sizing rule). Few in dev: every thread
+    # boots Magento, and the first start after an install is a cold one.
+    env_default FRANKENPHP_WEB_WORKERS 4
+    env_default FRANKENPHP_STATIC_WORKERS 4
+    env_default FRANKENPHP_MEDIA_WORKERS 2
     # Always this machine's: the dev image's www-data takes them.
     env_set HOST_UID "$(id -u)"
     env_set HOST_GID "$(id -g)"
@@ -290,27 +300,31 @@ setup_dev() {
     "$STACK_ROOT/bin/render"
 
     # A new project setup started and didn't finish (lib/project.sh has the state file)
-    # is repaired or recreated, and stays a new project, so --hyva and --sample-data
-    # still apply. With no files left in the root, it's simply created again.
+    # is repaired or recreated. With no files left in the root, it's simply created again.
     local resume_step
     resume_step=$(project_state_step)
     if [ -n "$resume_step" ] && [ -n "$(ls -A "$(magento_root)")" ]; then
         [ -n "$IMPORT" ] && die "$(magento_root) is a new project setup didn't finish, not a store's code. Leave --import out to finish it, or point --magento-root at the store."
         project_resume "$resume_step" "$MAGEOS_VERSION" "$RESUME"
-        new_project=1
     elif [ ! -f "$(magento_root)/composer.json" ]; then
         [ -n "$IMPORT" ] && die "--import needs the store's code in $(magento_root). For a new project, leave --import out."
         project_new "$MAGEOS_VERSION"
-        new_project=1
     else
         project_ensure_worker_mode "$RESUME"
-        if [ "$HYVA" = "1" ] || [ "$SAMPLE" = "1" ]; then
-            warn "--hyva and --sample-data apply to new projects only; ignoring them for the existing project"
-            HYVA=0 SAMPLE=0
-        fi
     fi
 
     [ -n "$FROM_ENV_PHP" ] && env_import_env_php "$(project)-app:dev" "$FROM_ENV_PHP"
+
+    # --hyva and --sample-data are installer options, so they apply whenever the
+    # installer runs: a new project, a retry after a failed install, or an existing
+    # project with an empty database. They're dropped only when it won't run. This
+    # comes after --from-env-php, which is what sets CRYPT_KEY and INSTALL_DATE.
+    if { [ "$HYVA" = "1" ] || [ "$SAMPLE" = "1" ]; } && { [ -n "$IMPORT" ] || installed; }; then
+        local why="Magento is already installed (CRYPT_KEY and INSTALL_DATE are set)"
+        [ -n "$IMPORT" ] && why="--import loads a dump instead"
+        warn "--hyva and --sample-data apply only when the installer runs, and it won't: $why. Ignoring them."
+        HYVA=0 SAMPLE=0
+    fi
 
     info "starting the database, Valkey, RabbitMQ and OpenSearch (waiting until they're healthy)"
     compose up -d --wait \
@@ -339,24 +353,46 @@ setup_dev() {
             echo
             export HYVA_PROJECT_KEY HYVA_API_TOKEN
         fi
+        # Before the installer, so setup:install enables Hyvä and everything it brings,
+        # and installs the sample data (lib/project.sh). The installer still activates
+        # the theme afterwards, after the sample data has assigned Luma.
+        [ "$HYVA" = "1" ] && project_require_hyva
+        [ "$SAMPLE" = "1" ] && project_require_sample_data
         admin_password=$(rand_admin_password)
         install_preseed "$admin_password" "$SAMPLE" "$HYVA" "$LOCALE" "$CURRENCY" "$TIMEZONE"
         install_handoff "$RESUME"
         install_capture
-        [ "$HYVA" = "1" ] && [ "$new_project" = "1" ] && project_add_hyva_worker_mode
     else
         info "Magento is already installed (CRYPT_KEY and INSTALL_DATE are set)"
     fi
 
+    if [ -n "$admin_password" ]; then
+        # This run installed, and setup:install has done everything setup:upgrade would,
+        # except import the system section the stack writes into env.php. Magento refuses
+        # every request until that's imported ("The configuration file has changed"), so
+        # it's done before the stack starts, in a one-off container whose entrypoint has
+        # just written env.php.
+        info "importing the configuration the stack writes into env.php"
+        compose run --rm --no-deps -T "$(service app)" php bin/magento app:config:import --no-interaction
+    fi
+
     info "starting the whole stack (waiting until it's healthy)"
     compose up -d --wait
-    "$STACK_ROOT/bin/magento" setup:upgrade
-    "$STACK_ROOT/bin/magento" cache:flush
-    if [ -n "$IMPORT" ] || [ -n "$admin_password" ]; then
+    if [ -n "$admin_password" ]; then
+        # Hyvä and the sample data are in place before the installer, so nothing arrives
+        # late for setup:upgrade. The flush rules out Valkey entries from an earlier
+        # attempt with the same cache prefix.
+        "$STACK_ROOT/bin/magento" cache:flush
         "$STACK_ROOT/bin/magento" indexer:reindex
+    else
+        # An import, or a project that was already installed: the code can be ahead of
+        # the database (a dump from elsewhere, worker mode just added).
+        "$STACK_ROOT/bin/magento" setup:upgrade
+        "$STACK_ROOT/bin/magento" cache:flush
+        [ -n "$IMPORT" ] && "$STACK_ROOT/bin/magento" indexer:reindex
+        # Worker mode: the workers loaded their classes before setup:upgrade.
+        "$STACK_ROOT/bin/restart" app cron consumers
     fi
-    # Worker mode: the workers loaded their classes before setup:upgrade.
-    "$STACK_ROOT/bin/restart" app cron consumers
 
     if is_wsl && [ "$SKIP_WINDOWS" = "0" ]; then
         "$STACK_ROOT/bin/trust" || warn "bin/trust didn't finish; run it again later"
@@ -442,6 +478,10 @@ setup_server() {
     env_default DATA_DIR "$STACK_ROOT/data"
     env_default MARIADB_DATA "$(env_get DATA_DIR)/mysql"
     env_default ACTIVE_COLOR blue
+    # FrankenPHP threads: provisional until measured in prod mode (.env.example).
+    env_default FRANKENPHP_WEB_WORKERS 8
+    env_default FRANKENPHP_STATIC_WORKERS 4
+    env_default FRANKENPHP_MEDIA_WORKERS 2
     if [ -n "$IMAGE_OPT" ]; then
         env_set "APP_IMAGE_$(env_get ACTIVE_COLOR blue | tr '[:lower:]' '[:upper:]')" "$IMAGE_OPT"
         env_set APP_IMAGE_ACTIVE "$IMAGE_OPT"
@@ -452,6 +492,7 @@ setup_server() {
     [ -n "$(env_get APP_IMAGE_ACTIVE)" ] || die "no app image yet: pass --image <image:tag> (CI builds it)"
     env_generate_secrets
     env_validate
+    server_memory_check
 
     server_data_dirs "$(env_get DATA_DIR)"
     server_report_unmet

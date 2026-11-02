@@ -14,6 +14,8 @@
 x-server-php: &server-php
   scale: 1
   pull_policy: missing
+  # Each app colour's cap. Cron and consumers set their own below: they run no
+  # FrankenPHP workers, so their memory has nothing to do with the app's.
   mem_limit: ${APP_MEM_LIMIT:-3g}
   volumes:
     - ${DATA_DIR:?set DATA_DIR in .env}/media:/app/pub/media
@@ -64,6 +66,8 @@ services:
     <<: *server-php
     container_name: {{PROJECT}}-cron
     image: ${APP_IMAGE_ACTIVE:-{{PROJECT}}-app:unset}
+    # Two group loops (CRON_GROUPS) at once, each a bin/magento process.
+    mem_limit: ${CRON_MEM_LIMIT:-2g}
     command: ["cron"]
     environment:
       STACK_COLOR: ${ACTIVE_COLOR:-blue}
@@ -77,6 +81,8 @@ services:
     <<: *server-php
     container_name: {{PROJECT}}-consumers
     image: ${APP_IMAGE_ACTIVE:-{{PROJECT}}-app:unset}
+    # One process per MAGENTO_CONSUMERS entry, under Supervisor.
+    mem_limit: ${CONSUMERS_MEM_LIMIT:-2g}
     command: ["consumers"]
     environment:
       STACK_COLOR: ${ACTIVE_COLOR:-blue}

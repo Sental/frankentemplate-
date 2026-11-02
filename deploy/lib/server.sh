@@ -27,6 +27,55 @@ server_report_unmet() {
     exit 1
 }
 
+# mem_mib VALUE: a Compose memory value (3g, 512m, 2048k, 1gb, or plain bytes) in MiB.
+# Fails, printing nothing, on anything else, such as a fraction like 1.5g.
+mem_mib() {
+    local v=${1,,}
+    v=${v%b}
+    case "$v" in
+        *[!0-9kmg]* | "" ) return 1 ;;
+        *g) [[ "${v%g}" =~ ^[0-9]+$ ]] && echo $(( ${v%g} * 1024 )) ;;
+        *m) [[ "${v%m}" =~ ^[0-9]+$ ]] && echo $(( ${v%m} )) ;;
+        *k) [[ "${v%k}" =~ ^[0-9]+$ ]] && echo $(( ${v%k} / 1024 )) ;;
+        *)  [[ "$v" =~ ^[0-9]+$ ]] && echo $(( v / 1048576 )) ;;
+    esac
+}
+
+# server_memory_check: what the stack's memory caps add up to during a release, when
+# both app colours run at once, against the host's RAM. It only warns: how much to run
+# on a host is the operator's decision, and the caps are ceilings, not usage.
+server_memory_check() {
+    local host_kib host_mib total=0 spec key def count value mib
+    local -a lines=()
+    host_kib=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null)
+    if [ -z "$host_kib" ]; then
+        warn "can't read the host's RAM from /proc/meminfo, so the memory caps aren't checked"
+        return 0
+    fi
+    host_mib=$(( host_kib / 1024 ))
+    for spec in APP_MEM_LIMIT:3g:2 CRON_MEM_LIMIT:2g:1 CONSUMERS_MEM_LIMIT:2g:1 \
+                MARIADB_MEM_LIMIT:2g:1 OPENSEARCH_MEM_LIMIT:2g:1; do
+        IFS=: read -r key def count <<< "$spec"
+        value=$(env_get "$key" "$def")
+        if ! mib=$(mem_mib "$value"); then
+            warn "can't add up $key=$value (use whole numbers with k, m or g), so the memory caps aren't checked"
+            return 0
+        fi
+        total=$(( total + mib * count ))
+        lines+=("$(printf '  %d x %-20s %6s = %6d MiB' "$count" "$key" "$value" $(( mib * count )))")
+    done
+    if [ "$total" -le "$host_mib" ]; then
+        info "memory caps during a release: $total MiB of the host's $host_mib MiB"
+        return 0
+    fi
+    warn "the stack's memory caps add up to $total MiB during a release, more than the host's $host_mib MiB:"
+    printf '%s\n' "${lines[@]}" >&2
+    printf '%s\n' \
+        "  Not capped, on top of that: Valkey (VALKEY_*_MEMORY), RabbitMQ, Varnish (VARNISH_SIZE) and Caddy." \
+        "  The caps are ceilings, not usage, so this may be fine. If it isn't, lower the caps or the" \
+        "  FRANKENPHP_*_WORKERS in .env (.env.example has the sizing rule), then re-run setup." >&2
+}
+
 server_require_root() {
     [ "$(id -u)" -eq 0 ] || die "setup server must run as root (sudo -E deploy/setup server ...), unless --stack-only"
 }

@@ -60,6 +60,12 @@ services:
       CRON_GROUPS: ${CRON_GROUPS:-default index}
       DB_QUERY_LOG: ${DB_QUERY_LOG:-disabled}
       MAX_REQUESTS: ${MAX_REQUESTS:-0}
+      # FrankenPHP threads for each worker (deploy/config/frankenphp/Caddyfile). setup
+      # writes them for each mode. The fallbacks are the small dev values, so a .env from
+      # before these keys existed never means FrankenPHP's 2 threads per CPU.
+      FRANKENPHP_WEB_WORKERS: ${FRANKENPHP_WEB_WORKERS:-4}
+      FRANKENPHP_STATIC_WORKERS: ${FRANKENPHP_STATIC_WORKERS:-4}
+      FRANKENPHP_MEDIA_WORKERS: ${FRANKENPHP_MEDIA_WORKERS:-2}
       STORE_DOMAIN: ${STORE_DOMAIN:?set STORE_DOMAIN in .env}
       STORE_ALIASES: ${STORE_ALIASES:-}
       # Service hosts, named <project>-<service>.
@@ -107,7 +113,13 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 120s
+      # FrankenPHP listens only once every worker thread has booted Magento. The first
+      # start after an install (empty generated/, cold caches) is the slow one: 291 s
+      # with 96 threads. Failures don't count during start_period, and start_interval
+      # checks every 5 s meanwhile, so a fast start is still healthy within seconds.
+      # start_interval needs Docker Engine 25 or newer (setup's preflight checks).
+      start_period: 300s
+      start_interval: 5s
 
   # ---------------------------------------------------------------------------
   # Edge: TLS. Dev uses Caddy's local CA, servers use ACME. The Caddyfile is
