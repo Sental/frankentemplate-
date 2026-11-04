@@ -201,6 +201,48 @@ remove_never_started() {
     done
 }
 
+# dev_image_build: builds the dev image under a tag of its own, dev-<UTC datetime>, and
+# records it as DEV_IMAGE_TAG in .env, so every build is named and its new image ID is
+# expected. --pull fetches the newest published build image first: dev follows the moving
+# tag. If the build fails, DEV_IMAGE_TAG goes back to the image that was there. On success,
+# older dev tags go, except the one just replaced.
+dev_image_build() {
+    local previous tag
+    previous=$(env_get DEV_IMAGE_TAG dev)
+    tag="dev-$(date -u +%Y%m%d%H%M)"
+    env_set DEV_IMAGE_TAG "$tag"
+    if ! compose build --pull "$(service app)"; then
+        env_set DEV_IMAGE_TAG "$previous"
+        die "the dev image didn't build (its output is above); DEV_IMAGE_TAG is back to $previous"
+    fi
+    info "built $(project)-app:$tag"
+    dev_image_prune "$previous"
+}
+
+# dev_image_prune KEEP: removes this project's dev image tags (<project>-app:dev and
+# :dev-*) other than DEV_IMAGE_TAG and KEEP, the one just replaced, which stays for a
+# rollback. It names each tag it removes, and touches nothing else. A tag that a container
+# still uses is kept, with Docker's reason.
+dev_image_prune() {
+    local keep=$1 current repo tag out
+    current=$(env_get DEV_IMAGE_TAG dev)
+    repo="$(project)-app"
+    for tag in $(docker image ls "$repo" --format '{{.Tag}}'); do
+        case "$tag" in
+            dev|dev-*) ;;
+            *) continue ;;
+        esac
+        if [ "$tag" = "$current" ] || [ "$tag" = "$keep" ]; then
+            continue
+        fi
+        if out=$(docker image rm "$repo:$tag" 2>&1); then
+            info "removed the old dev image $repo:$tag"
+        else
+            warn "kept the old dev image $repo:$tag: $out"
+        fi
+    done
+}
+
 # caddy_reload: makes a running edge re-read the rendered Caddyfile, without dropping
 # connections. A running Caddy never notices a new file on its own, and `compose up`
 # doesn't recreate it for one. Run bin/render first. When Caddy isn't running, there's

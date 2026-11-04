@@ -12,11 +12,48 @@ For a first run, start with the [main README](../README.md).
 | `lib/` | setup's own code, plus the few scripts it runs inside the app image |
 | `templates/` | compose, Caddy, Varnish and OpenSearch files, rendered with values from `.env` |
 | `config/` | files used as they are: PHP, FrankenPHP, MariaDB, OpenSearch and the log tailer |
-| `Dockerfile` | the app image, with `dev` and `prod` targets |
+| `Dockerfile` | the app image, with `dev`, `build` and `prod` targets (see [The app image](#the-app-image)) |
 | `.env.example` | every setting, documented; setup creates `.env` from it |
 | `hooks/` | project-specific build and release steps ([README](hooks/README.md)) |
 | `patches/` | patches setup adds to a new project ([README](patches/README.md)) |
 | `secrets/` | encrypted copies of servers' `.env` files ([README](secrets/README.md)) |
+
+## The app image
+
+The Dockerfile installs nothing. It builds on published images from
+[`sental90/mageos-frankenphp-docker`](https://github.com/Sental/mageos-frankenphp-docker): `runtime`
+(FrankenPHP, the PHP extensions, supervisor, logrotate) and `build` (`runtime` plus git, Node, Composer, and
+Xdebug installed but not enabled). It adds only the stack's config, and so an edit to a file in `config/`
+rebuilds in seconds.
+
+| Target | Built on | |
+| --- | --- | --- |
+| `dev` | `<php>-build`, the moving tag | the stack's config, Xdebug loaded (`config/app/xdebug.ini`) and idle, `www-data` as your UID |
+| `build` | `<php>-build-<datetime>` | `composer install`, theme builds, `di:compile`, static content deploy |
+| `prod` | `<php>-runtime-<datetime>` | the stack's config plus `build`'s output: what servers run |
+
+- **`PHP_VERSION` in `.env` (8.3, 8.4 or 8.5) picks the images.** Switching needs no Dockerfile edit: change
+  it, then run `bin/build`.
+- **Dev follows the moving tag.** setup and `bin/build` pull the newest image first. Each dev build is
+  tagged `<project>-app:dev-<UTC datetime>`, recorded as `DEV_IMAGE_TAG` in `.env`, and the older dev tags
+  are removed, except the one just replaced, which stays for a rollback.
+- **`build` and `prod` use dated tags, one pair of lines per PHP version** at the top of the Dockerfile.
+  Staging and production move to a newer image only when those lines are bumped, and staging builds on it
+  before production does.
+- **A prod image is built from a project that's been set up in dev,** not from a new one. A build has no
+  database, so static content deploy reads the stores and themes from `app/etc/config.php`. Put them there
+  once, in dev, and commit the file:
+
+  ```bash
+  bin/magento app:config:dump scopes themes i18n
+  ```
+
+  `bin/build <tag>` checks for the three sections first, and stops with this command if one is missing;
+  without them, static content deploy fails minutes in with "The default website isn't defined".
+- **Once `scopes` is dumped, stores are managed in code.** `app:config:import` (which `setup:upgrade` runs)
+  makes the database match `config.php`, and deletes any website, store or store view that isn't in it. It
+  runs whenever the `scopes` section has changed. So after creating a store in the admin, run the dump
+  again and commit it, or the next deploy that changes `scopes` removes the store.
 
 ## What setup generates in the project root
 

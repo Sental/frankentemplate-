@@ -22,7 +22,9 @@ x-logging: &logging
 # What every dev PHP role adds to the abstract {{PROJECT}}-php.
 x-dev-php: &dev-php
   scale: 1
-  image: {{PROJECT}}-app:dev
+  # setup and bin/build give each dev build its own tag, dev-<UTC datetime>, and write it
+  # to .env; `dev` is only the fallback before the first one.
+  image: {{PROJECT}}-app:${DEV_IMAGE_TAG:-dev}
   volumes:
     - {{MAGENTO_ROOT}}:/app
   environment:

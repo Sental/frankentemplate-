@@ -305,8 +305,9 @@ setup_dev() {
     # The Magento root is the dev image's build context, so it must exist before the
     # build, even empty for a new project. Created by you, never by a bind mount.
     mkdir -p "$(magento_root)"
-    info "building the dev image and the OpenSearch image"
-    compose build "$(service app)" "$(service opensearch)"
+    info "building the dev image (on the newest published build image) and the OpenSearch image"
+    dev_image_build
+    compose build "$(service opensearch)"
     os_hashes_ensure "$(project)-opensearch:$(env_get OPENSEARCH_TAG 3)"
     "$STACK_ROOT/bin/render"
 
@@ -324,7 +325,7 @@ setup_dev() {
         project_ensure_worker_mode "$RESUME"
     fi
 
-    [ -n "$FROM_ENV_PHP" ] && env_import_env_php "$(project)-app:dev" "$FROM_ENV_PHP"
+    [ -n "$FROM_ENV_PHP" ] && env_import_env_php "$(project)-app:$(env_get DEV_IMAGE_TAG dev)" "$FROM_ENV_PHP"
 
     # --hyva and --sample-data are installer options, so they apply whenever the
     # installer runs: a new project, a retry after a failed install, or an existing
