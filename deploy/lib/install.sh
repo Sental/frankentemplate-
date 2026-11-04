@@ -51,7 +51,7 @@ install_preseed() {
     PRESEED_DB_NAME=$(env_get DB_NAME magento)
     PRESEED_DB_USER=$(env_get DB_USER magento)
     PRESEED_DB_PASSWORD=$(env_get DB_PASSWORD)
-    PRESEED_ADMIN_EMAIL="admin@$(env_get STORE_DOMAIN)"
+    PRESEED_ADMIN_EMAIL=$(env_get ADMIN_EMAIL)
     PRESEED_ADMIN_USER="admin"
     PRESEED_ADMIN_PASSWORD=$admin_password
     PRESEED_ADMIN_FRONT_NAME=$(env_get ADMIN_FRONT_NAME admin)

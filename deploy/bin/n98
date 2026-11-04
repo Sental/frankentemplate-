@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
 # bin/n98 <command> [args]: n98-magerun2 in the app container, as www-data.
-# It runs bin/n98-magerun2.phar from the Magento root, which you download yourself
-# (the message below says where).
+# It runs the project's vendor/bin/n98-magerun2, which Mage-OS requires
+# (n98/magerun2-dist).
 # shellcheck source=_lib.sh
 . "$(dirname "$0")/_lib.sh"
 
-[ -f "$(magento_root)/bin/n98-magerun2.phar" ] \
-    || die "no bin/n98-magerun2.phar in the Magento root. Download it from https://files.magerun.net/ and verify its checksum."
-php_exec php bin/n98-magerun2.phar "$@"
+php_exec php vendor/bin/n98-magerun2 "$@"

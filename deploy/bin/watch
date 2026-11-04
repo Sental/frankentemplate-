@@ -3,6 +3,8 @@
 #   on      FrankenPHP restarts its workers whenever a file under app/code
 #           (*.php, *.xml), app/etc (*.php) or vendor/composer/installed.json changes.
 #           Worker mode stays on, as in production; you just stop restarting by hand.
+#           app/code is created if it's missing: FrankenPHP gives up on a watched
+#           directory that doesn't exist when it starts.
 #   off     workers keep their code until `bin/restart app`
 #   status  the setting the running app started with
 #

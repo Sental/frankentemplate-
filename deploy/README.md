@@ -169,4 +169,10 @@ through Dashboards or the security REST API is reverted on the next setup run.
 - **OpenSearch won't start:** check `vm.max_map_count`. setup prints how to set it.
 - **A reindex fails with a 403 from OpenSearch:** its log names the missing permission. Add it to the
   `magento` role, then run `bin/opensearch-security`.
+- **The admin password is lost** (setup stopped after the install, or it scrolled away): use "Forgot your
+  password?" on the admin login. The reset link goes to `ADMIN_EMAIL`, and in dev it lands in Mailpit.
 - **Ports 80 and 443 are taken:** pass `--http-port` and `--https-port` to setup.
+- **A container runs but can't reach the others after a failed start** (for example, `search.` gives a 502
+  while Dashboards is up): a failed start can drop a container's networks (moby/moby#51758). Before
+  every `up`, the commands here remove a container that was created but never started, so it's created
+  again. One that had run before needs `bin/start <service> --force-recreate`.

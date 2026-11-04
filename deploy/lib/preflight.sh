@@ -27,6 +27,20 @@ preflight_docker() {
     docker buildx version >/dev/null 2>&1 || die "docker buildx isn't installed (the Dockerfile needs BuildKit)"
 }
 
+# preflight_other_containers: warns when containers from outside this project are
+# running. One that holds a port this stack publishes fails the stack's start, which
+# comes after the install. It's a warning, not a check: most running containers hold
+# no port of ours.
+preflight_other_containers() {
+    local others
+    # The separator can't occur in a project or container name.
+    others=$(docker ps --format '{{.Label "com.docker.compose.project"}}|{{.Names}}' \
+        | awk -F'|' -v project="$(project)" '$1 != project { print $2 }' | tr '\n' ' ')
+    [ -n "$others" ] || return 0
+    warn "other containers are running, a port conflict could cause a failed installation"
+    printf '    %s\n' "${others% }" >&2
+}
+
 # preflight_max_map_count: OpenSearch needs vm.max_map_count >= 262144. It's read
 # inside a container: under Docker Desktop the value that counts belongs to Docker's
 # VM, not the WSL distro.

@@ -286,6 +286,17 @@ setup_dev() {
     env_generate_secrets
     env_validate
 
+    # Only a run that will install: --from-env-php sets CRYPT_KEY and INSTALL_DATE
+    # after the build, and --import loads a dump instead.
+    if [ -z "$IMPORT$FROM_ENV_PHP" ] && ! installed; then
+        local admin_email
+        admin_email=$(env_get ADMIN_EMAIL)
+        [ -n "$admin_email" ] \
+            || die "ADMIN_EMAIL is empty: pass --set ADMIN_EMAIL=<address>. The admin user gets it, and a forgotten password is reset there (in dev the mail lands in Mailpit)."
+        [[ "$admin_email" =~ ^[^@[:space:]]+@[^@[:space:]]+$ ]] \
+            || die "ADMIN_EMAIL '$admin_email' isn't an email address: pass --set ADMIN_EMAIL=<address>"
+        preflight_other_containers
+    fi
     preflight_max_map_count
     link_bin
 
@@ -376,8 +387,12 @@ setup_dev() {
         compose run --rm --no-deps -T "$(service app)" php bin/magento app:config:import --no-interaction
     fi
 
-    info "starting the whole stack (waiting until it's healthy)"
-    compose up -d --wait
+    # Cron starts last, once setup's own Magento work is done. Its indexer_reindex_all_invalid
+    # would race setup's reindex, and indexer:reindex fails on an index another process
+    # is building ("locked by another reindex process"). --scale overrides scale: 1 for
+    # this command only.
+    info "starting the stack except cron (waiting until it's healthy)"
+    compose up -d --wait --scale "$(service cron)=0"
     if [ -n "$admin_password" ]; then
         # Hyvä and the sample data are in place before the installer, so nothing arrives
         # late for setup:upgrade. The flush rules out Valkey entries from an earlier
@@ -390,9 +405,12 @@ setup_dev() {
         "$STACK_ROOT/bin/magento" setup:upgrade
         "$STACK_ROOT/bin/magento" cache:flush
         [ -n "$IMPORT" ] && "$STACK_ROOT/bin/magento" indexer:reindex
-        # Worker mode: the workers loaded their classes before setup:upgrade.
-        "$STACK_ROOT/bin/restart" app cron consumers
+        # Worker mode: the workers loaded their classes before setup:upgrade. Cron isn't
+        # running yet. Any indexer left invalid, cron rebuilds within its first minute.
+        "$STACK_ROOT/bin/restart" app consumers
     fi
+    info "starting cron"
+    compose up -d --wait "$(service cron)"
 
     if is_wsl && [ "$SKIP_WINDOWS" = "0" ]; then
         "$STACK_ROOT/bin/trust" || warn "bin/trust didn't finish; run it again later"
@@ -422,9 +440,10 @@ summary_dev() {
 EOF
     if [ -n "$admin_password" ]; then
         cat >&2 <<EOF
-             user admin, password $admin_password
-             Shown only now; it's stored nowhere. Note it, or reset it with
-             bin/magento admin:user:create.
+             username admin, email $(env_get ADMIN_EMAIL), password $admin_password
+             Shown only now; it's stored nowhere. Forgot it? "Forgot your password?"
+             on the admin login mails a reset link to ADMIN_EMAIL; it lands in
+             Mailpit (Mail, below).
 EOF
     fi
     cat >&2 <<EOF
@@ -518,11 +537,14 @@ setup_server() {
     fi
     installed || die "no store yet. A server starts from an existing store: pass --import <dump> --from-env-php <env.php>."
 
-    info "starting the stack on the $(env_get ACTIVE_COLOR blue) colour (waiting until it's healthy)"
-    compose up -d --wait
+    # Cron starts last, as in setup_dev: its reindex would race setup's.
+    info "starting the stack on the $(env_get ACTIVE_COLOR blue) colour, except cron (waiting until it's healthy)"
+    compose up -d --wait --scale "$(service cron)=0"
     "$STACK_ROOT/bin/magento" setup:upgrade --keep-generated
     "$STACK_ROOT/bin/magento" cache:flush
     [ -n "$IMPORT" ] && "$STACK_ROOT/bin/magento" indexer:reindex
+    info "starting cron"
+    compose up -d --wait "$(service cron)"
 
     smoke_server
 }

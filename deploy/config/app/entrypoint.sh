@@ -121,7 +121,14 @@ write_env_php() {
 
 mode_web() {
     installed || log "warning: Magento isn't installed yet, so requests will fail until setup has run"
-    if [ "${FRANKENPHP_WATCH:-0}" = "1" ]; then
+    # Dev only, whatever FRANKENPHP_WATCH says.
+    if [ "${STACK_ENV:-}" = dev ] && [ "${FRANKENPHP_WATCH:-0}" = "1" ]; then
+        # FrankenPHP gives up for good on a watched directory that doesn't exist when it
+        # starts, so modules added there later wouldn't restart the workers. A new
+        # project has no app/code until it has a module of its own.
+        if is_magento_root; then
+            run_as_app mkdir -p /app/app/code
+        fi
         # Injected into each worker block of /etc/frankenphp/Caddyfile. Caddy expands
         # {$VAR} before it parses the file, so each line becomes its own directive.
         # Never watch files written at runtime (logs, caches): every write would restart

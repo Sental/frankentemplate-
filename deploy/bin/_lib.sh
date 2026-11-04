@@ -184,7 +184,21 @@ compose() {
     for file in "${list[@]}"; do
         args+=(-f "$STACK_ROOT/$file")
     done
+    [ "${1:-}" = up ] && remove_never_started
     docker compose --project-directory "$STACK_ROOT" --env-file "$ENV_FILE" "${args[@]}" "$@"
+}
+
+# remove_never_started: removes this project's containers that were created but never
+# started. A failed start leaves its container like that, with its networks gone
+# (moby/moby#51758), and Compose would start it as it is rather than create it again.
+# A container that never ran holds nothing of its own; volumes are left alone.
+remove_never_started() {
+    local name
+    for name in $(docker ps -a --filter "label=com.docker.compose.project=$(project)" \
+            --filter status=created --format '{{.Names}}'); do
+        info "removing $name: it was created but never started, and a failed start leaves a container without its networks (moby/moby#51758)"
+        docker rm "$name" >/dev/null
+    done
 }
 
 # caddy_reload: makes a running edge re-read the rendered Caddyfile, without dropping

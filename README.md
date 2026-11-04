@@ -39,7 +39,7 @@ browser ─▶ Caddy (TLS) ─▶ Varnish 8 ─▶ FrankenPHP app (PHP 8.5, work
 ```bash
 git clone <this repository> myshop
 cd myshop
-deploy/setup dev --project myshop
+deploy/setup dev --project myshop --set ADMIN_EMAIL=you@example.com
 ```
 
 That does four things:
@@ -51,7 +51,8 @@ That does four things:
    queue and cache already filled in. setup prints which answers to give first. If the install fails,
    setup offers to clean up so that a re-run starts again cleanly.
 3. **Starts everything.** Then it prints the URLs and the admin password. The password is shown once and
-   not stored anywhere.
+   not stored anywhere. If you lose it, "Forgot your password?" on the admin login mails a reset link to
+   `ADMIN_EMAIL`, and in dev every mail lands in Mailpit.
 4. **On WSL, runs `bin/trust`.** One UAC prompt adds the hosts entries to Windows and makes Windows trust
    Caddy's local CA.
 

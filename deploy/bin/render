@@ -12,7 +12,8 @@
 #
 # It also sets COMPOSE_PROJECT_NAME, COMPOSE_FILE, COMPOSE_PROFILES and DEPLOY_DIR
 # in .env. It's safe to run at any time; bin/start, bin/varnish and bin/release all
-# run it. Anything left unrendered stops it with the template and token named.
+# run it. It writes only the files that are missing or would change, and says which.
+# Anything left unrendered stops it with the template and token named.
 #
 # Templates use {{TOKEN}}. Everything else, ${VAR} for Compose and {$VAR} for Caddy,
 # passes through untouched.
@@ -31,9 +32,15 @@ USAGE
 [ $# -eq 0 ] || usage
 
 declare -A TOKENS=()
+# What render_file wrote, relative to the stack root, and which of those it replaced
+# (a file that was missing is new, not a change).
+WRITTEN=()
+REPLACED=()
 
-# render_file TEMPLATE OUTPUT [MODE]: substitutes every {{TOKEN}}, then replaces OUTPUT
-# by renaming a temp file into place, so a reader never sees half a file.
+# render_file TEMPLATE OUTPUT [MODE]: substitutes every {{TOKEN}}, then writes OUTPUT only
+# if it's missing or its content differs. An unchanged file keeps its inode: on Docker
+# Desktop, a stopped container whose single-file mount was replaced won't start again.
+# A write renames a temp file into place, so a reader never sees half a file.
 render_file() {
     local template=$1 output=$2 mode=${3:-0644} content name leftover tmp
     content=$(<"$DEPLOY_DIR/templates/$template")
@@ -48,8 +55,16 @@ render_file() {
     mkdir -p "$(dirname "$output")"
     tmp="$output.tmp.$$"
     printf '%s\n' "$content" > "$tmp"
+    if [ -f "$output" ] && cmp -s "$tmp" "$output"; then
+        rm -f "$tmp"
+        # chmod keeps the inode.
+        chmod "$mode" "$output"
+        return 0
+    fi
+    if [ -f "$output" ]; then REPLACED+=("$output"); fi
     chmod "$mode" "$tmp"
     mv "$tmp" "$output"
+    WRITTEN+=("${output#"$STACK_ROOT"/}")
 }
 
 # Single-quoted YAML scalar: a ' inside is written as ''.
@@ -181,7 +196,30 @@ main() {
         render_file opensearch/opensearch_dashboards.yml.tpl "$stack_dir/opensearch/opensearch_dashboards.yml" 0600
     fi
 
-    info "rendered for $env (project $project, varnish -> $varnish_backend)"
+    # These are mounted as single files, so a container keeps the file it started with
+    # until it's recreated. On Docker Desktop, once the file is replaced, the container
+    # won't start or restart again ("error mounting … no such file or directory").
+    local file opensearch=0 dashboards=0
+    if [ "${#REPLACED[@]}" -gt 0 ]; then
+        for file in "${REPLACED[@]}"; do
+            case "$file" in
+                "$stack_dir"/opensearch/security/*) opensearch=1 ;;
+                "$stack_dir"/opensearch/opensearch_dashboards.yml) dashboards=1 ;;
+            esac
+        done
+    fi
+    if [ "$opensearch" = "1" ]; then
+        warn "OpenSearch's users, roles or mappings changed: run bin/start opensearch --force-recreate, or on Docker Desktop it won't start again. Recreating doesn't apply them to an existing cluster; bin/opensearch-security does."
+    fi
+    if [ "$dashboards" = "1" ]; then
+        warn "Dashboards' config changed: run bin/start opensearch-dashboards --force-recreate, or on Docker Desktop it won't start again."
+    fi
+
+    if [ "${#WRITTEN[@]}" -gt 0 ]; then
+        info "rendered for $env (project $project, varnish -> $varnish_backend): wrote ${WRITTEN[*]}"
+    else
+        info "rendered for $env (project $project, varnish -> $varnish_backend): nothing changed"
+    fi
 }
 
 main "$@"
