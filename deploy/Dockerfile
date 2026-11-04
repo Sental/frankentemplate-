@@ -33,8 +33,8 @@
 ARG PHP_VERSION=8.5
 
 # The dated images, one runtime and one build per PHP version, published together.
-FROM sental90/mageos-frankenphp-docker:8.3-runtime-202611042023 AS base-runtime-8.3
-FROM sental90/mageos-frankenphp-docker:8.3-build-202611042023 AS base-build-8.3
+FROM sental90/mageos-frankenphp-docker:8.4-runtime-202611042023 AS base-runtime-8.3
+FROM sental90/mageos-frankenphp-docker:8.4-build-202611042023 AS base-build-8.3
 FROM sental90/mageos-frankenphp-docker:8.4-runtime-202611042023 AS base-runtime-8.4
 FROM sental90/mageos-frankenphp-docker:8.4-build-202611042023 AS base-build-8.4
 FROM sental90/mageos-frankenphp-docker:8.5-runtime-202611042024 AS base-runtime-8.5
