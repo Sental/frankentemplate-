@@ -68,7 +68,7 @@ jobs:
       # A Mage-OS build needs more than the runner's free disk space.
       - uses: jlumbroso/free-disk-space@v2.0.0
         with:
-          tool-cache: true
+          preinstalled-runtimes: true
           android: true
           dotnet: true
           haskell: true
@@ -122,7 +122,7 @@ jobs:
       # A Mage-OS build needs more than the runner's free disk space.
       - uses: jlumbroso/free-disk-space@v2.0.0
         with:
-          tool-cache: true
+          preinstalled-runtimes: true
           android: true
           dotnet: true
           haskell: true
@@ -148,7 +148,8 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       # The shop's own labels (title, source, url, revision, created, version, ...), which
-      # replace the ones inherited from the base images.
+      # replace the ones inherited from the base images. metadata-action sets no vendor, so
+      # it's set below to the shop's GitHub owner rather than kept from the base images.
       - name: Tags and labels
         id: meta
         uses: docker/metadata-action@v6
@@ -159,6 +160,7 @@ jobs:
             type=raw,value=${{ github.event.release.tag_name }},enable=${{ github.event_name == 'release' }}
           labels: |
             org.opencontainers.image.base.name=${{ steps.base.outputs.ref }}
+            org.opencontainers.image.vendor=${{ github.repository_owner }}
 
       - uses: docker/setup-buildx-action@v4
 

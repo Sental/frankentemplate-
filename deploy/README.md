@@ -70,8 +70,8 @@ each shop's own Renovate keeps that shop current.
 | a pull request into `staging` or `main` | none | nothing: it builds and checks |
 
 Each image is the Dockerfile's `prod` target, built on the dated base images `PHP_VERSION` picks. It
-carries the shop's own labels (title, source, revision, created, version), and `base.name` names the
-dated runtime image it was built on.
+carries the shop's own labels (title, source, revision, created, version, and vendor, which is the
+repository's owner), and `base.name` names the dated runtime image it was built on.
 
 ### Setting up a shop
 
