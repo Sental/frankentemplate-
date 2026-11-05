@@ -21,12 +21,6 @@
       "enabled": false
     },
     {
-      "description": "deploy/Dockerfile copies the stack's files from a build context named deploy (COPY --from=deploy). Renovate's Dockerfile handling reads that as an image called deploy, which doesn't exist.",
-      "matchManagers": ["dockerfile"],
-      "matchPackageNames": ["deploy"],
-      "enabled": false
-    },
-    {
       "description": "The dated base-image lines, in one pull request.",
       "matchPackageNames": ["sental90/mageos-frankenphp-docker"],
       "groupName": "mageos-frankenphp base images"
