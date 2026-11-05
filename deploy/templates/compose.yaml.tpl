@@ -256,7 +256,7 @@ services:
   # RabbitMQ
   # ---------------------------------------------------------------------------
   {{PROJECT}}-rabbitmq:
-    image: rabbitmq:${RABBITMQ_TAG:-4.3.7-management-alpine}
+    image: rabbitmq:${RABBITMQ_TAG:-4.4.0-management-alpine}
     container_name: {{PROJECT}}-rabbitmq
     # The Erlang node is named after the hostname. With a container-generated
     # hostname, every recreate started an empty broker and every consumer exited.
