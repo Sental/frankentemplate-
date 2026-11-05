@@ -55,6 +55,67 @@ rebuilds in seconds.
   runs whenever the `scopes` section has changed. So after creating a store in the admin, run the dump
   again and commit it, or the next deploy that changes `scopes` removes the store.
 
+## Staging and production images
+
+A shop made from this template builds its images in GitHub Actions (`.github/workflows/image.yml`) and
+keeps its versions current with Renovate (`renovate.json`). The template repository carries both files
+only to hand them on: it has no Magento code, so the workflow skips there, and its Renovate keeps the
+template's own files current for the next shop. Nothing flows from the template into an existing shop:
+each shop's own Renovate keeps that shop current.
+
+| Event | Environment | Publishes |
+| --- | --- | --- |
+| a push to `staging` | `staging` | `<IMAGE>:<short commit hash>` |
+| a release, published | `production` | `<IMAGE>:<release tag>`, built from the release's commit |
+| a pull request into `staging` or `main` | none | nothing: it builds and checks |
+
+Each image is the Dockerfile's `prod` target, built on the dated base images `PHP_VERSION` picks. It
+carries the shop's own labels (title, source, revision, created, version), and `base.name` names the
+dated runtime image it was built on.
+
+### Setting up a shop
+
+1. Create the `staging` branch.
+2. On Docker Hub, create a private repository for the shop's images (for example `sental90/myshop`) and
+   an access token with Read & Write.
+3. In the shop's repository, under Settings → Secrets and variables → Actions:
+
+   | Where | Name | |
+   | --- | --- | --- |
+   | Repository variable | `PHP_VERSION` | required: 8.3, 8.4 or 8.5, the same as `.env` in dev |
+   | Repository variable | `THEME_PATHS`, `HOOK_ENV` | as in `.env`, when the shop uses them |
+   | Repository variable | `LOCALES`, `SCD_JOBS` | optional; default `en_US` and `1` |
+   | Repository variable | `MAGENTO_ROOT`, `DEPLOY_DIR` | optional; default `src` and `deploy`. Use `.` and `deploy` when `deploy/` sits inside the Magento repository. |
+   | Repository secret | `COMPOSER_AUTH_JSON` | the contents of `auth.json`, if the shop has private packages. Repository-level, so pull request builds can install them too; a pull request from a fork gets no secrets. |
+   | Environment `staging` | variable `IMAGE`, secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` | deployment branches: `staging` only |
+   | Environment `production` | the same three | deployment branches and tags: your release tags (for example the tag rule `v*`). A release runs on its tag, not on a branch, so a branch-only rule refuses it. |
+
+   An environment can also override any repository variable.
+4. Commit `app/etc/config.php` with its scopes, themes and i18n (see [The app image](#the-app-image)). The
+   workflow checks for them first, and stops in seconds if one is missing.
+5. Install the [Renovate app](https://github.com/apps/renovate) on the shop's repository.
+
+### What Renovate keeps current
+
+In a shop, each update gets a pull request on `main` and one on `staging` (in the template, only `main`
+exists). Automerge is off.
+
+- **The dated base images:** one pull request moves the Dockerfile's dated lines to the newest images.
+  Each line moves only to a newer datetime of its own PHP version and kind, never to another version.
+- **The service images:** the compose templates pin exact versions (`image: caddy:${CADDY_TAG:-2.11.8-alpine}`
+  and so on). OpenSearch and Dashboards move together, and so do the four places OpenSearch's version is
+  written: compose's build argument and image tag, `config/opensearch/Dockerfile` and `lib/opensearch.sh`.
+  `alpine` is pinned in the log tailer and the helper containers.
+- **Major versions of MariaDB, OpenSearch, Valkey and RabbitMQ** can need a migration, so they wait for your
+  approval on the Dependency Dashboard instead of opening a pull request.
+- **The workflow's GitHub Actions.**
+
+### A Magento repository of its own
+
+The workflow expects the Magento code in the same repository. If `src/` is a repository of its own, add an
+`actions/checkout` step with `repository: <owner>/<magento repository>`, `path: src` and a token that can
+read it, before the steps that use `MAGENTO_ROOT`.
+
 ## What setup generates in the project root
 
 All of these are in the root `.gitignore`. Never commit them.

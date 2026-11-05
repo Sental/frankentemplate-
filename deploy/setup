@@ -308,7 +308,7 @@ setup_dev() {
     info "building the dev image (on the newest published build image) and the OpenSearch image"
     dev_image_build
     compose build "$(service opensearch)"
-    os_hashes_ensure "$(project)-opensearch:$(env_get OPENSEARCH_TAG 3)"
+    os_hashes_ensure "$(os_image)"
     "$STACK_ROOT/bin/render"
 
     # A new project setup started and didn't finish (lib/project.sh has the state file)
@@ -521,7 +521,7 @@ setup_server() {
     os_certs_ensure "$OPENSEARCH_UID:$OPENSEARCH_UID"
     "$STACK_ROOT/bin/render"
     compose build "$(service opensearch)"
-    os_hashes_ensure "$(project)-opensearch:$(env_get OPENSEARCH_TAG 3)"
+    os_hashes_ensure "$(os_image)"
     "$STACK_ROOT/bin/render"
 
     info "pulling $(env_get APP_IMAGE_ACTIVE)"

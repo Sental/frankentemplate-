@@ -23,22 +23,8 @@ tag=${1:-}
 root=$(magento_root)
 
 # Checked first, so a project that isn't ready fails now, not minutes in at static content
-# deploy ("The default website isn't defined"). PHP reads the file, so formatting can't
-# fool the check; it only asks whether each section exists (an empty i18n is valid).
-config="$root/app/etc/config.php"
-[ -f "$config" ] || die "no $config: a prod image is built from a project that's been set up in dev"
-php=$(env_get PHP_VERSION 8.5)
-# PHP's own errors go to stdout, so a failure's message is in $missing; Docker's go to
-# stderr, above it.
-# shellcheck disable=SC2016 # the $ belongs to PHP
-if ! missing=$(docker run --rm --entrypoint php -v "$config:/tmp/config.php:ro" \
-    "sental90/mageos-frankenphp-docker:$php-runtime" -r '
-        $config = include "/tmp/config.php";
-        echo implode(" ", array_filter(["scopes", "themes", "i18n"], fn ($s) => !array_key_exists($s, $config)));
-    '); then
-    die "couldn't read $config: $missing"
-fi
-[ -z "$missing" ] || die "app/etc/config.php is missing these sections: $missing. A build has no database, so static content deploy reads the stores and themes from there. In dev, run bin/magento app:config:dump scopes themes i18n, then commit app/etc/config.php. Stores are then managed in code: see deploy/README.md, The app image."
+# deploy. CI runs the same check.
+bash "$DEPLOY_DIR/lib/prod-build-check.sh" "$root" "$(env_get PHP_VERSION 8.5)" || exit 1
 
 args=(
     --build-context "deploy=$DEPLOY_DIR"

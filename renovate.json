@@ -1,6 +1,91 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": [
-    "config:recommended"
+  "description": [
+    "Shared by the template and every shop made from it: deploy/README.md, Staging and production images.",
+    "In the template only main exists; in a shop each update gets a pull request on main and one on staging."
+  ],
+  "extends": ["config:recommended"],
+  "baseBranchPatterns": ["$default", "/^staging$/"],
+  "automerge": false,
+  "packageRules": [
+    {
+      "description": "The base images' dated lines belong to the regex manager below. Renovate's own Dockerfile handling reads 8.3-runtime-<datetime> as version 8.3, and would move a line to another PHP version.",
+      "matchManagers": ["dockerfile"],
+      "matchPackageNames": ["sental90/mageos-frankenphp-docker"],
+      "enabled": false
+    },
+    {
+      "description": "OpenSearch's version is written in four places; the OpenSearch regex manager below updates them together.",
+      "matchManagers": ["dockerfile"],
+      "matchPackageNames": ["opensearchproject/opensearch"],
+      "enabled": false
+    },
+    {
+      "description": "The dated base-image lines, in one pull request.",
+      "matchPackageNames": ["sental90/mageos-frankenphp-docker"],
+      "groupName": "mageos-frankenphp base images"
+    },
+    {
+      "description": "OpenSearch and Dashboards must run the same version.",
+      "matchPackageNames": ["opensearchproject/opensearch", "opensearchproject/opensearch-dashboards"],
+      "groupName": "OpenSearch"
+    },
+    {
+      "description": "Services that hold data: a major version can need a migration, so it waits for approval on the Dependency Dashboard.",
+      "matchPackageNames": [
+        "mariadb",
+        "valkey/valkey",
+        "rabbitmq",
+        "opensearchproject/opensearch",
+        "opensearchproject/opensearch-dashboards"
+      ],
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "The dated base-image lines in deploy/Dockerfile. Each moves only to a newer datetime of its own <php>-runtime or <php>-build.",
+      "managerFilePatterns": ["/(^|/)deploy/Dockerfile$/"],
+      "matchStrings": ["FROM (?<depName>sental90/mageos-frankenphp-docker):(?<currentValue>\\d+\\.\\d+-(?:runtime|build)-\\d{12}) AS "],
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "regex:^(?<compatibility>\\d+\\.\\d+-(?:runtime|build))-(?<major>\\d{12})$"
+    },
+    {
+      "customType": "regex",
+      "description": "The service images' defaults in the compose templates: image: <name>:${X_TAG:-<version>}.",
+      "managerFilePatterns": ["/(^|/)deploy/templates/compose[^/]*\\.tpl$/"],
+      "matchStrings": ["image: (?<depName>[a-z0-9][a-z0-9._/-]*):\\$\\{[A-Z_]+_TAG:-(?<currentValue>[^}]+)\\}"],
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "OpenSearch's version: compose's build argument and image tag, its Dockerfile's default, and setup's os_image.",
+      "managerFilePatterns": [
+        "/(^|/)deploy/templates/compose\\.yaml\\.tpl$/",
+        "/(^|/)deploy/config/opensearch/Dockerfile$/",
+        "/(^|/)deploy/lib/opensearch\\.sh$/"
+      ],
+      "matchStrings": [
+        "OPENSEARCH_TAG:-(?<currentValue>\\d+\\.\\d+\\.\\d+)",
+        "ARG OPENSEARCH_TAG=(?<currentValue>\\d+\\.\\d+\\.\\d+)",
+        "env_get OPENSEARCH_TAG (?<currentValue>\\d+\\.\\d+\\.\\d+)"
+      ],
+      "depNameTemplate": "opensearchproject/opensearch",
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "alpine: the log tailer, and the helper containers setup and bin/secrets run.",
+      "managerFilePatterns": [
+        "/(^|/)deploy/templates/compose[^/]*\\.tpl$/",
+        "/(^|/)deploy/lib/[^/]+\\.sh$/",
+        "/(^|/)deploy/bin/[^/]+$/"
+      ],
+      "matchStrings": ["\\balpine:(?<currentValue>\\d+\\.\\d+\\.\\d+)\\b"],
+      "depNameTemplate": "alpine",
+      "datasourceTemplate": "docker"
+    }
   ]
 }

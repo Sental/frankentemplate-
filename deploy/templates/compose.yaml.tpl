@@ -126,7 +126,7 @@ services:
   # rendered into .stack/caddy for each mode.
   # ---------------------------------------------------------------------------
   {{PROJECT}}-caddy:
-    image: caddy:${CADDY_TAG:-2-alpine}
+    image: caddy:${CADDY_TAG:-2.11.8-alpine}
     container_name: {{PROJECT}}-caddy
     restart: unless-stopped
     logging: *logging
@@ -155,7 +155,7 @@ services:
   # which is safe only while Caddy, which refuses PURGE and BAN, is the one way in.
   # ---------------------------------------------------------------------------
   {{PROJECT}}-varnish:
-    image: varnish:${VARNISH_TAG:-8-alpine}
+    image: varnish:${VARNISH_TAG:-8.0.2-alpine}
     container_name: {{PROJECT}}-varnish
     restart: unless-stopped
     logging: *logging
@@ -181,7 +181,7 @@ services:
   # MariaDB
   # ---------------------------------------------------------------------------
   {{PROJECT}}-mariadb:
-    image: mariadb:${MARIADB_TAG:-12}
+    image: mariadb:${MARIADB_TAG:-12.3.3}
     container_name: {{PROJECT}}-mariadb
     restart: unless-stopped
     logging: *logging
@@ -212,7 +212,7 @@ services:
   # so a full instance never drops a live session for cache data.
   # ---------------------------------------------------------------------------
   {{PROJECT}}-valkey-session:
-    image: valkey/valkey:${VALKEY_TAG:-9-alpine}
+    image: valkey/valkey:${VALKEY_TAG:-9.1.3-alpine}
     container_name: {{PROJECT}}-valkey-session
     restart: unless-stopped
     logging: *logging
@@ -235,7 +235,7 @@ services:
   # release.
   # ---------------------------------------------------------------------------
   {{PROJECT}}-valkey-cache:
-    image: valkey/valkey:${VALKEY_TAG:-9-alpine}
+    image: valkey/valkey:${VALKEY_TAG:-9.1.3-alpine}
     container_name: {{PROJECT}}-valkey-cache
     restart: unless-stopped
     logging: *logging
@@ -256,7 +256,7 @@ services:
   # RabbitMQ
   # ---------------------------------------------------------------------------
   {{PROJECT}}-rabbitmq:
-    image: rabbitmq:${RABBITMQ_TAG:-4.3-management-alpine}
+    image: rabbitmq:${RABBITMQ_TAG:-4.3.7-management-alpine}
     container_name: {{PROJECT}}-rabbitmq
     # The Erlang node is named after the hostname. With a container-generated
     # hostname, every recreate started an empty broker and every consumer exited.
@@ -289,8 +289,8 @@ services:
     build:
       context: {{DEPLOY_DIR}}/config/opensearch
       args:
-        OPENSEARCH_TAG: ${OPENSEARCH_TAG:-3}
-    image: {{PROJECT}}-opensearch:${OPENSEARCH_TAG:-3}
+        OPENSEARCH_TAG: ${OPENSEARCH_TAG:-3.9.0}
+    image: {{PROJECT}}-opensearch:${OPENSEARCH_TAG:-3.9.0}
     container_name: {{PROJECT}}-opensearch
     restart: unless-stopped
     logging: *logging

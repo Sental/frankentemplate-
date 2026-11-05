@@ -96,6 +96,13 @@ Both of these work. Choose one per shop:
 Either way, the root `.gitignore` already keeps out what setup generates: `.env` (which holds secrets),
 the rendered compose files, `.stack/` and the `bin` link.
 
+## Staging and production images
+
+A shop builds its images in GitHub Actions: a push to its `staging` branch publishes a staging image, and a
+published release a production one. Renovate keeps the base images and the services' versions current.
+This template carries the workflow and `renovate.json` to hand them on to each shop; setting them up in a
+shop is described in [deploy/README.md](deploy/README.md#staging-and-production-images).
+
 ## Day to day
 
 Run these from the project root:

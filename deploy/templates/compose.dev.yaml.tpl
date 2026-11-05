@@ -122,7 +122,7 @@ services:
   # ---- Dev tools --------------------------------------------------------------
 
   {{PROJECT}}-log-tailer:
-    image: alpine:3
+    image: alpine:3.24.3
     container_name: {{PROJECT}}-log-tailer
     restart: unless-stopped
     logging: *logging
@@ -133,7 +133,7 @@ services:
     network_mode: none
 
   {{PROJECT}}-dozzle:
-    image: amir20/dozzle:${DOZZLE_TAG:-v11}
+    image: amir20/dozzle:${DOZZLE_TAG:-v11.4.1}
     container_name: {{PROJECT}}-dozzle
     restart: unless-stopped
     logging: *logging
@@ -147,7 +147,7 @@ services:
       - backend
 
   {{PROJECT}}-mailpit:
-    image: axllent/mailpit:${MAILPIT_TAG:-v1}
+    image: axllent/mailpit:${MAILPIT_TAG:-v1.33.0}
     container_name: {{PROJECT}}-mailpit
     restart: unless-stopped
     logging: *logging
@@ -162,7 +162,7 @@ services:
       - backend
 
   {{PROJECT}}-phpmyadmin:
-    image: phpmyadmin:${PHPMYADMIN_TAG:-5}
+    image: phpmyadmin:${PHPMYADMIN_TAG:-5.2.3}
     container_name: {{PROJECT}}-phpmyadmin
     restart: unless-stopped
     logging: *logging
@@ -180,7 +180,7 @@ services:
 
   {{PROJECT}}-opensearch-dashboards:
     profiles: ["search-ui"]
-    image: opensearchproject/opensearch-dashboards:${DASHBOARDS_TAG:-3}
+    image: opensearchproject/opensearch-dashboards:${DASHBOARDS_TAG:-3.9.0}
     container_name: {{PROJECT}}-opensearch-dashboards
     restart: unless-stopped
     logging: *logging

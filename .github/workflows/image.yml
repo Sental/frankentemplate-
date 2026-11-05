@@ -1,0 +1,187 @@
+# Builds this shop's production image (the Dockerfile's `prod` target) and publishes it
+# to Docker Hub:
+#
+#   push to `staging`     environment `staging`     ->  <IMAGE>:<short commit hash>
+#   release published     environment `production`  ->  <IMAGE>:<release tag>
+#   pull request          no environment            ->  built and checked, never pushed
+#
+# The template repository has no Magento code: there the `shop` job finds no
+# <MAGENTO_ROOT>/composer.json, and both builds are skipped. In a shop they run.
+#
+# Settings -> Secrets and variables -> Actions (deploy/README.md, "Staging and production
+# images", describes each one):
+#   repository variables  PHP_VERSION (required), THEME_PATHS, LOCALES, SCD_JOBS, HOOK_ENV,
+#                         MAGENTO_ROOT (default src), DEPLOY_DIR (default deploy)
+#   repository secret     COMPOSER_AUTH_JSON, if the shop has private Composer packages
+#   environments `staging` and `production`:
+#     variable            IMAGE, e.g. sental90/myshop (a private Docker Hub repository)
+#     secrets             DOCKERHUB_USERNAME, DOCKERHUB_TOKEN (read and write)
+name: image
+
+on:
+  push:
+    branches: [staging]
+  release:
+    types: [published]
+  pull_request:
+    branches: [staging, main]
+
+permissions:
+  contents: read
+
+env:
+  MAGENTO_ROOT: ${{ vars.MAGENTO_ROOT || 'src' }}
+  DEPLOY_DIR: ${{ vars.DEPLOY_DIR || 'deploy' }}
+  PHP_VERSION: ${{ vars.PHP_VERSION }}
+
+jobs:
+  # A shop, or the template repository?
+  shop:
+    runs-on: ubuntu-latest
+    outputs:
+      found: ${{ steps.find.outputs.found }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: find
+        run: |
+          if [ -f "$MAGENTO_ROOT/composer.json" ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No $MAGENTO_ROOT/composer.json: this is the template repository (or MAGENTO_ROOT is wrong), so there's no image to build."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # Pull requests: build exactly what a merge would publish, push nothing. No environment,
+  # so the Docker Hub credentials are out of reach; a pull request from a fork gets no
+  # secrets at all.
+  test:
+    needs: shop
+    if: needs.shop.outputs.found == 'true' && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Require PHP_VERSION
+        run: |
+          [ -n "$PHP_VERSION" ] || { echo "Set the repository variable PHP_VERSION (8.3, 8.4 or 8.5)." >&2; exit 1; }
+
+      # A Mage-OS build needs more than the runner's free disk space.
+      - uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: false
+
+      - name: Check app/etc/config.php
+        run: bash "$DEPLOY_DIR/lib/prod-build-check.sh" "$MAGENTO_ROOT" "$PHP_VERSION"
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build
+        uses: docker/build-push-action@v7
+        env:
+          COMPOSER_AUTH_JSON: ${{ secrets.COMPOSER_AUTH_JSON }}
+        with:
+          context: ${{ env.MAGENTO_ROOT }}
+          file: ${{ env.DEPLOY_DIR }}/Dockerfile
+          target: prod
+          build-contexts: deploy=${{ env.DEPLOY_DIR }}
+          build-args: |
+            PHP_VERSION=${{ env.PHP_VERSION }}
+            THEME_PATHS=${{ vars.THEME_PATHS }}
+            LOCALES=${{ vars.LOCALES || 'en_US' }}
+            SCD_JOBS=${{ vars.SCD_JOBS || '1' }}
+            HOOK_ENV=${{ vars.HOOK_ENV }}
+          # Only when set: the Dockerfile builds without credentials otherwise.
+          secret-envs: ${{ secrets.COMPOSER_AUTH_JSON != '' && 'composer_auth=COMPOSER_AUTH_JSON' || '' }}
+          push: false
+
+  # A push to staging, or a published release: build and publish.
+  publish:
+    needs: shop
+    if: needs.shop.outputs.found == 'true' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'release' && 'production' || 'staging' }}
+    concurrency:
+      group: image-${{ github.event_name == 'release' && 'production' || 'staging' }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Require PHP_VERSION and IMAGE
+        env:
+          IMAGE: ${{ vars.IMAGE }}
+        run: |
+          [ -n "$PHP_VERSION" ] || { echo "Set the repository variable PHP_VERSION (8.3, 8.4 or 8.5)." >&2; exit 1; }
+          [ -n "$IMAGE" ] || { echo "Set the variable IMAGE in this environment, e.g. sental90/myshop." >&2; exit 1; }
+
+      # A Mage-OS build needs more than the runner's free disk space.
+      - uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: false
+
+      - name: Check app/etc/config.php
+        run: bash "$DEPLOY_DIR/lib/prod-build-check.sh" "$MAGENTO_ROOT" "$PHP_VERSION"
+
+      # The dated runtime image PHP_VERSION picks, for the base.name label. Our images
+      # carry the base images' labels otherwise.
+      - name: Read the base image
+        id: base
+        run: |
+          ref=$(awk -v want="base-runtime-$PHP_VERSION" '$1 == "FROM" && $3 == "AS" && $4 == want { print $2 }' "$DEPLOY_DIR/Dockerfile")
+          [ -n "$ref" ] || { echo "$DEPLOY_DIR/Dockerfile has no 'AS base-runtime-$PHP_VERSION' line: PHP $PHP_VERSION isn't supported." >&2; exit 1; }
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # The shop's own labels (title, source, url, revision, created, version, ...), which
+      # replace the ones inherited from the base images.
+      - name: Tags and labels
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ vars.IMAGE }}
+          tags: |
+            type=sha,prefix=,format=short,enable=${{ github.event_name == 'push' }}
+            type=raw,value=${{ github.event.release.tag_name }},enable=${{ github.event_name == 'release' }}
+          labels: |
+            org.opencontainers.image.base.name=${{ steps.base.outputs.ref }}
+
+      - uses: docker/setup-buildx-action@v4
+
+      # The build cache is a :buildcache tag in the same repository, as in the project this
+      # template came from, where it was settled after long trouble with other caches.
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        env:
+          COMPOSER_AUTH_JSON: ${{ secrets.COMPOSER_AUTH_JSON }}
+        with:
+          context: ${{ env.MAGENTO_ROOT }}
+          file: ${{ env.DEPLOY_DIR }}/Dockerfile
+          target: prod
+          build-contexts: deploy=${{ env.DEPLOY_DIR }}
+          build-args: |
+            PHP_VERSION=${{ env.PHP_VERSION }}
+            THEME_PATHS=${{ vars.THEME_PATHS }}
+            LOCALES=${{ vars.LOCALES || 'en_US' }}
+            SCD_JOBS=${{ vars.SCD_JOBS || '1' }}
+            HOOK_ENV=${{ vars.HOOK_ENV }}
+          secret-envs: ${{ secrets.COMPOSER_AUTH_JSON != '' && 'composer_auth=COMPOSER_AUTH_JSON' || '' }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=${{ vars.IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ vars.IMAGE }}:buildcache,mode=max

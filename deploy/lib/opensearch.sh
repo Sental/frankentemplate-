@@ -32,7 +32,7 @@ os_certs_ensure() {
     docker run --rm -i \
         -e PROJECT="$(project)" -e OWNER="$owner" \
         -v "$stack_dir/certs:/certs" -v "$stack_dir/ca:/ca" \
-        alpine:3 sh -eu <<'SH'
+        alpine:3.24.3 sh -eu <<'SH'
 apk add --no-cache -q openssl >/dev/null
 cd /certs
 key() { openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$1" 2>/dev/null; }
@@ -113,6 +113,13 @@ os_hash() {
     [ -n "$hash" ] || die "OpenSearch's hash.sh returned no hash (image $image). Run it by hand to see why:
     docker run --rm --entrypoint /usr/share/opensearch/plugins/opensearch-security/tools/hash.sh $image -p test"
     printf '%s' "$hash"
+}
+
+# os_image: the stack's OpenSearch image, <project>-opensearch:<version>. The same default
+# version is in templates/compose.yaml.tpl (twice) and config/opensearch/Dockerfile;
+# Renovate updates all of them in one pull request.
+os_image() {
+    printf '%s-opensearch:%s' "$(project)" "$(env_get OPENSEARCH_TAG 3.9.0)"
 }
 
 # os_hashes_ensure IMAGE: writes hashes.env if it's missing; an existing one is kept even
