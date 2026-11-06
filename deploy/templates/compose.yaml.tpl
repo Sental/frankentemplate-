@@ -126,7 +126,7 @@ services:
   # rendered into .stack/caddy for each mode.
   # ---------------------------------------------------------------------------
   {{PROJECT}}-caddy:
-    image: caddy:${CADDY_TAG:-2.11.8-alpine}
+    image: caddy:${CADDY_TAG:-2.11.9-alpine}
     container_name: {{PROJECT}}-caddy
     restart: unless-stopped
     logging: *logging
