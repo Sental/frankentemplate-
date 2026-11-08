@@ -120,7 +120,7 @@ services:
   # ---- Dev tools --------------------------------------------------------------
 
   {{PROJECT}}-log-tailer:
-    image: alpine:3.24.3
+    image: alpine:3.24.4
     container_name: {{PROJECT}}-log-tailer
     restart: unless-stopped
     logging: *logging

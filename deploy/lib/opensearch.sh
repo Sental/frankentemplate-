@@ -32,7 +32,7 @@ os_certs_ensure() {
     docker run --rm -i \
         -e PROJECT="$(project)" -e OWNER="$owner" \
         -v "$stack_dir/certs:/certs" -v "$stack_dir/ca:/ca" \
-        alpine:3.24.3 sh -eu <<'SH'
+        alpine:3.24.4 sh -eu <<'SH'
 apk add --no-cache -q openssl >/dev/null
 cd /certs
 key() { openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$1" 2>/dev/null; }

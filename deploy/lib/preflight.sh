@@ -46,7 +46,7 @@ preflight_other_containers() {
 # VM, not the WSL distro.
 preflight_max_map_count() {
     local n
-    n=$(docker run --rm alpine:3.24.3 cat /proc/sys/vm/max_map_count)
+    n=$(docker run --rm alpine:3.24.4 cat /proc/sys/vm/max_map_count)
     [ "$n" -ge 262144 ] && return 0
     if is_wsl; then
         die "Docker's VM has vm.max_map_count=$n; OpenSearch needs 262144. In PowerShell:
