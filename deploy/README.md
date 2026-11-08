@@ -205,9 +205,11 @@ On a dev machine, what setup does depends on what it finds:
   `FRANKENPHP_MEDIA_WORKERS` set how many PHP threads each FrankenPHP worker runs. setup writes 4/4/2 in
   dev and 8/4/2 on servers. Every thread boots its own Magento, so these set both the first-start time and
   the app's memory.
-  - **On servers,** `APP_MEM_LIMIT` (for each app colour), `CRON_MEM_LIMIT` and `CONSUMERS_MEM_LIMIT` cap
-    the containers. `setup server` warns when the caps add up to more than the host's RAM during a release.
-  - `.env.example` has the sizing rule.
+  - **On servers,** `APP_MEM_LIMIT` (for each app colour), `CRON_MEM_LIMIT`, `CONSUMERS_MEM_LIMIT`,
+    `MARIADB_MEM_LIMIT` and `OPENSEARCH_MEM_LIMIT` cap the containers. `setup server` warns when the caps
+    add up to more than the host's RAM during a release.
+  - `.env.example` has the sizing rule and what was measured in prod mode: about 35 MiB per web thread,
+    about one web thread per CPU core, and OpenSearch's cap at least 1 GiB above its heap.
 
 ## Dev URLs
 

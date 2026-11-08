@@ -54,7 +54,7 @@ server_memory_check() {
     fi
     host_mib=$(( host_kib / 1024 ))
     for spec in APP_MEM_LIMIT:3g:2 CRON_MEM_LIMIT:2g:1 CONSUMERS_MEM_LIMIT:2g:1 \
-                MARIADB_MEM_LIMIT:2g:1 OPENSEARCH_MEM_LIMIT:2g:1; do
+                MARIADB_MEM_LIMIT:2g:1 OPENSEARCH_MEM_LIMIT:3g:1; do
         IFS=: read -r key def count <<< "$spec"
         value=$(env_get "$key" "$def")
         if ! mib=$(mem_mib "$value"); then

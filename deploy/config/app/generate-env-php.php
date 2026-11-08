@@ -62,72 +62,6 @@ function listOf(string $value): array
     return array_values(array_filter(array_map('trim', preg_split('/[\s,]+/', $value) ?: []), 'strlen'));
 }
 
-/**
- * Encrypts a value exactly as Magento's Encryptor does, so system config marked
- * `Encrypted` (system/smtp/password) can be held in env.php.
- *
- * Mirrors Magento\Framework\Encryption\Encryptor::encrypt() and
- * Adapter\SodiumChachaIetf::encrypt() in Mage-OS 3.6:
- *  - the crypt key splits on whitespace; the last key is the current one, and its
- *    index is the key version
- *  - a key starting with "base64" is base64-decoded first
- *  - ChaCha20-Poly1305 IETF with a random nonce, which also serves as the
- *    additional data
- *  - result: "<keyVersion>:3:" . base64(nonce . ciphertext)
- */
-function encryptForMagento(string $plain, string $cryptKey): string
-{
-    [$version, $key] = currentKey($cryptKey);
-    $nonce = random_bytes(SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_IETF_NPUBBYTES);
-    $cipher = sodium_crypto_aead_chacha20poly1305_ietf_encrypt($plain, $nonce, $nonce, $key);
-    return $version . ':3:' . base64_encode($nonce . $cipher);
-}
-
-/**
- * Decrypts a value encryptForMagento() produced. --diff uses it to compare
- * encrypted values: they differ on every run because of the random nonce.
- */
-function decryptForMagento(string $value, string $cryptKey): ?string
-{
-    $parts = explode(':', $value, 3);
-    if (count($parts) !== 3 || $parts[1] !== '3') {
-        return null;
-    }
-    $keys = preg_split('/\s+/', trim($cryptKey)) ?: [];
-    $key = decodeKey($keys[(int)$parts[0]] ?? '');
-    $raw = base64_decode($parts[2], true);
-    if ($raw === false || strlen($raw) <= SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_IETF_NPUBBYTES) {
-        return null;
-    }
-    $nonce = substr($raw, 0, SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_IETF_NPUBBYTES);
-    $plain = sodium_crypto_aead_chacha20poly1305_ietf_decrypt(
-        substr($raw, SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_IETF_NPUBBYTES),
-        $nonce,
-        $nonce,
-        $key
-    );
-    return $plain === false ? null : $plain;
-}
-
-/** @return array{0: int, 1: string} the current key version and its raw key */
-function currentKey(string $cryptKey): array
-{
-    $keys = preg_split('/\s+/', trim($cryptKey)) ?: [];
-    $version = count($keys) - 1;
-    $key = decodeKey($keys[$version] ?? '');
-    if (strlen($key) !== SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_IETF_KEYBYTES) {
-        throw new RuntimeException(
-            'CRYPT_KEY must be 32 bytes (or "base64" followed by 32 base64-encoded bytes) to encrypt SMTP_PASSWORD'
-        );
-    }
-    return [$version, $key];
-}
-
-function decodeKey(string $key): string
-{
-    return str_starts_with($key, 'base64') ? (string)base64_decode(substr($key, 6)) : $key;
-}
-
 /** Builds the env.php array. Every value comes from the environment. */
 function buildConfig(): array
 {
@@ -277,7 +211,7 @@ function buildConfig(): array
             'include_index_check' => 0,
         ],
         'directories' => ['document_root_is_pub' => true],
-        'system' => ['default' => systemDefaults($cryptKey, $fpc)],
+        'system' => ['default' => systemDefaults($fpc)],
         'cache_types' => cacheTypes(),
         'downloadable_domains' => listOf(env('STORE_DOMAIN') . ' ' . env('STORE_ALIASES')),
         'install' => ['date' => required('INSTALL_DATE')],
@@ -291,7 +225,7 @@ function buildConfig(): array
 }
 
 /** system/default values: locked in env.php, so the admin shows them read-only. */
-function systemDefaults(string $cryptKey, string $fpc): array
+function systemDefaults(string $fpc): array
 {
     $searchHost = required('OPENSEARCH_HOST');
     $searchPort = env('OPENSEARCH_PORT', '9200');
@@ -363,12 +297,12 @@ function systemDefaults(string $cryptKey, string $fpc): array
             'ssl' => $ssl,
             'username' => env('SMTP_USER'),
         ];
-        $password = env('SMTP_PASSWORD');
-        if ($password !== '') {
-            // system/smtp/password is an Encrypted field, so Magento decrypts what it
-            // reads. A plaintext value here would decrypt to garbage.
-            $smtp['password'] = encryptForMagento($password, $cryptKey);
-        }
+        // No password here. It's an Encrypted field, and an encryption takes a random
+        // nonce, so writing it on every start changed the system section's hash each
+        // time: Magento then refused every uncached request until app:config:import, and
+        // each container (both colours, cron, consumers) held its own ciphertext. setup
+        // server stores it in the database once, when it installs the store
+        // (deploy/lib/smtp-password.container.php); the admin changes it after that.
         $system['system']['smtp'] = $smtp;
     }
 
@@ -476,7 +410,7 @@ function show(string $path, mixed $value): string
 }
 
 /** Prints what --write would change. Exit code 0 = no change, 1 = changes. */
-function diff(array $new, string $cryptKey): int
+function diff(array $new): int
 {
     $old = is_file(ENV_PHP) ? (include ENV_PHP) : [];
     $old = is_array($old) ? flatten($old) : [];
@@ -485,11 +419,6 @@ function diff(array $new, string $cryptKey): int
     foreach ($new + $old as $path => $_) {
         $before = $old[$path] ?? null;
         $after = $new[$path] ?? null;
-        if ($path === 'system.default.system.smtp.password' && is_string($before) && is_string($after)) {
-            if (decryptForMagento($before, $cryptKey) === decryptForMagento($after, $cryptKey)) {
-                continue;
-            }
-        }
         if ($before === $after) {
             continue;
         }
@@ -516,7 +445,7 @@ function main(array $argv): int
                 fwrite(STDERR, "[generate-env-php] wrote " . ENV_PHP . "\n");
                 return 0;
             case '--diff':
-                return diff($config, required('CRYPT_KEY'));
+                return diff($config);
             default:
                 fwrite(STDERR, "usage: php generate-env-php.php --write|--diff\n");
                 return 2;

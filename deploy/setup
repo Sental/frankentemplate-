@@ -107,7 +107,9 @@ Options:
   --domain DOMAIN        STORE_DOMAIN, the public hostname
   --aliases "A B"        hostnames that redirect to STORE_DOMAIN (e.g. "www.example.com")
   --acme-email EMAIL     Let's Encrypt account email
-  --image IMAGE          the app image to run (e.g. user/mage-os-app:abc1234); needed the first time
+  --image IMAGE          the app image to run (e.g. user/mage-os-app:abc1234); needed the first time.
+                         Pulled unless it's already on this host, so a tag that moves (latest)
+                         isn't refreshed
   --import FILE          load this .sql or .sql.gz dump; needed the first time
   --from-env-php FILE    take the store's immutable values from its env.php (needed with --import)
   --secrets FILE         start from a SOPS-encrypted .env (deploy/secrets/<env>.env); needs the age key
@@ -498,7 +500,7 @@ setup_server() {
     env_default DATA_DIR "$STACK_ROOT/data"
     env_default MARIADB_DATA "$(env_get DATA_DIR)/mysql"
     env_default ACTIVE_COLOR blue
-    # FrankenPHP threads: provisional until measured in prod mode (.env.example).
+    # FrankenPHP threads; .env.example has what was measured and the sizing rule.
     env_default FRANKENPHP_WEB_WORKERS 8
     env_default FRANKENPHP_STATIC_WORKERS 4
     env_default FRANKENPHP_MEDIA_WORKERS 2
@@ -524,8 +526,15 @@ setup_server() {
     os_hashes_ensure "$(os_image)"
     "$STACK_ROOT/bin/render"
 
-    info "pulling $(env_get APP_IMAGE_ACTIVE)"
-    docker pull "$(env_get APP_IMAGE_ACTIVE)"
+    # Pulled only when it isn't on this host yet, as compose's pull_policy: missing does.
+    # CI's tags never move (a commit hash, a release), so a local copy is that image; it
+    # also lets an image built here with bin/build run without a registry.
+    if docker image inspect "$(env_get APP_IMAGE_ACTIVE)" >/dev/null 2>&1; then
+        info "$(env_get APP_IMAGE_ACTIVE) is already on this host; not pulling it"
+    else
+        info "pulling $(env_get APP_IMAGE_ACTIVE)"
+        docker pull "$(env_get APP_IMAGE_ACTIVE)"
+    fi
     [ -n "$FROM_ENV_PHP" ] && env_import_env_php "$(env_get APP_IMAGE_ACTIVE)" "$FROM_ENV_PHP"
 
     compose up -d --wait \
@@ -542,6 +551,17 @@ setup_server() {
     info "starting the stack on the $(env_get ACTIVE_COLOR blue) colour, except cron (waiting until it's healthy)"
     compose up -d --wait --scale "$(service cron)=0"
     "$STACK_ROOT/bin/magento" setup:upgrade --keep-generated
+    # The SMTP password goes into the database once, when the store is installed; the
+    # admin changes it after that. After setup:upgrade, because config:set refuses to run
+    # while the config hash is out of date. The value reaches the container through the
+    # environment (-e with only the name), never a command line.
+    # deploy/lib/smtp-password.container.php says why it isn't in env.php.
+    if [ -n "$IMPORT" ] && [ -n "$(env_get SMTP_PASSWORD)" ]; then
+        info "storing SMTP_PASSWORD in the database, encrypted by Magento"
+        SMTP_PASSWORD=$(env_get SMTP_PASSWORD) docker exec -i -u www-data -e SMTP_PASSWORD \
+            "$(app_service)" php < "$DEPLOY_DIR/lib/smtp-password.container.php" \
+            || die "storing SMTP_PASSWORD failed (above). The store is installed; set the password in the admin, or fix the cause and re-run setup with --import on an empty database."
+    fi
     "$STACK_ROOT/bin/magento" cache:flush
     [ -n "$IMPORT" ] && "$STACK_ROOT/bin/magento" indexer:reindex
     info "starting cron"
@@ -551,15 +571,18 @@ setup_server() {
 }
 
 smoke_server() {
-    local domain code
+    local domain port url code
     domain=$(env_get STORE_DOMAIN)
-    # Straight at the local Caddy, with the real hostname, so this tests this server
-    # rather than Cloudflare. -k: the Let's Encrypt certificate may still be on its way.
+    port=$(env_get HTTPS_PORT 443)
+    url=$(base_url)
+    # Straight at the local Caddy, with the real hostname and HTTPS_PORT, so this tests
+    # this server rather than Cloudflare. -k: the Let's Encrypt certificate may still be
+    # on its way.
     code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 30 \
-        --resolve "$domain:443:127.0.0.1" "https://$domain/" || echo 000)
+        --resolve "$domain:$port:127.0.0.1" "$url" || echo 000)
     case "$code" in
-        200|301|302) info "smoke check: https://$domain/ answered $code from this server" ;;
-        *) warn "smoke check: https://$domain/ answered $code. Look at bin/log app and bin/log varnish." ;;
+        200|301|302) info "smoke check: $url answered $code from this server" ;;
+        *) warn "smoke check: $url answered $code. Look at bin/log app and bin/log varnish." ;;
     esac
 }
 

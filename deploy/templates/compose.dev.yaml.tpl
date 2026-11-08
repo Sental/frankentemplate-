@@ -33,7 +33,6 @@ x-dev-php: &dev-php
     SMTP_AUTH: none
     SMTP_SSL: none
     SMTP_USER: ""
-    SMTP_PASSWORD: ""
   extra_hosts:
     - "host.docker.internal:host-gateway"
   depends_on:
@@ -75,7 +74,6 @@ services:
       SMTP_AUTH: none
       SMTP_SSL: none
       SMTP_USER: ""
-      SMTP_PASSWORD: ""
       FRANKENPHP_WATCH: ${FRANKENPHP_WATCH:-1}
       XDEBUG_MODE: ${XDEBUG_MODE:-off}
 

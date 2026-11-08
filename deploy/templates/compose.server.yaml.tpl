@@ -89,8 +89,21 @@ services:
     healthcheck:
       disable: true
 
+  # Varnish resolves its backend (the active colour) only when its VCL loads, and refuses
+  # to load if the name doesn't resolve. Without this, a start could reach Varnish before
+  # the app's container exists: the VCL failed, Docker restarted Varnish, and `up --wait`
+  # failed setup. Docker knows a container's name as soon as it starts, so service_started
+  # is enough; waiting for health would hold Varnish back for the app's whole boot. No `restart: true` as in dev: on a server a
+  # colour switch is bin/release's VCL reload. Not covered: after a reboot Docker starts
+  # the containers itself, without this order, and Varnish retries under its restart
+  # policy until the app is up.
+  {{PROJECT}}-varnish:
+    depends_on:
+      {{VARNISH_BACKEND}}:
+        condition: service_started
+
   {{PROJECT}}-mariadb:
     mem_limit: ${MARIADB_MEM_LIMIT:-2g}
 
   {{PROJECT}}-opensearch:
-    mem_limit: ${OPENSEARCH_MEM_LIMIT:-2g}
+    mem_limit: ${OPENSEARCH_MEM_LIMIT:-3g}

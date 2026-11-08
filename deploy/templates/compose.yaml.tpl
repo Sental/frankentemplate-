@@ -95,7 +95,6 @@ services:
       SMTP_AUTH: ${SMTP_AUTH:-login}
       SMTP_SSL: ${SMTP_SSL:-tls}
       SMTP_USER: ${SMTP_USER:-}
-      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
     volumes:
       # The stack's private CA. The entrypoint adds it to the system trust store, so
       # ElasticSuite and core search can verify OpenSearch's certificate.

@@ -3,9 +3,10 @@
 A Docker stack that runs Mage-OS (or Magento Open Source) on FrankenPHP in worker mode, from a dev
 machine to blue/green production servers. One command sets it up: `deploy/setup`.
 
-> **Status: pre-release.** The dev path, `--hyva` and `--sample-data` are tested on WSL2 with a new
-> Mage-OS 3.6 project. Mage-OS 4.0, now the default, and server mode are still being tested, and CI and
-> blue/green releases are still being built.
+> **Status: pre-release.** The dev path, `--hyva` and `--sample-data` are tested on WSL2 with new
+> Mage-OS 3.6 and 4.0 projects, and CI builds and publishes each shop's staging and production images.
+> Server mode is still being tested. Deploying an image to a server, with blue/green releases, is still to
+> be built.
 
 ## What you get
 
@@ -127,7 +128,8 @@ editing `env.php` doesn't last. The same goes for `bin/magento cache:enable` and
 `deploy/setup server --env staging|production` prepares an Ubuntu or Debian server. It checks for
 Docker, the kernel settings, a deploy user and the firewall, and installs only what's missing. Then it
 sets up the stack from an existing store: `--image` and `--import` are needed the first time. See
-`deploy/setup server --help`. Releases (`bin/release`) and the CI workflow are still being built.
+`deploy/setup server --help`. CI builds the images; deploying one to a server (`bin/release`, with the
+blue/green switch) is still to be built.
 
 ## License
 
