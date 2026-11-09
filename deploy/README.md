@@ -86,11 +86,22 @@ repository's owner), and `base.name` names the dated runtime image it was built 
    | Repository variable | `THEME_PATHS`, `HOOK_ENV` | as in `.env`, when the shop uses them |
    | Repository variable | `LOCALES`, `SCD_JOBS` | optional; default `en_US` and `1` |
    | Repository variable | `MAGENTO_ROOT`, `DEPLOY_DIR` | optional; default `src` and `deploy`. Use `.` and `deploy` when `deploy/` sits inside the Magento repository. |
-   | Repository secret | `COMPOSER_AUTH_JSON` | the contents of `auth.json`, if the shop has private packages. Repository-level, so pull request builds can install them too; a pull request from a fork gets no secrets. |
+   | Repository secret | `COMPOSER_AUTH_JSON` | recommended: the contents of an `auth.json` with a GitHub token, plus any private packages' credentials (see below). Repository-level, so pull request builds can use it too; a pull request from a fork gets no secrets. |
    | Environment `staging` | variable `IMAGE`, secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` | deployment branches: `staging` only |
    | Environment `production` | the same three | deployment branches and tags: your release tags (for example the tag rule `v*`). A release runs on its tag, not on a branch, so a branch-only rule refuses it. |
 
    An environment can also override any repository variable.
+
+   **Why a GitHub token, even with no private packages:** many Composer packages are downloaded from
+   GitHub. Without a token Composer downloads them anonymously, which GitHub rate-limits, and during an
+   incident affecting unauthenticated users a build failed after 30 minutes of timeouts. A fine-grained
+   token with read-only access to public repositories is enough; give it an expiry. The secret, and
+   `<magento root>/auth.json` for a local `bin/build`, then holds at least:
+
+   ```json
+   {"github-oauth": {"github.com": "<token>"}}
+   ```
+
 4. Commit `app/etc/config.php` with its scopes, themes and i18n (see [The app image](#the-app-image)). The
    workflow checks for them first, and stops in seconds if one is missing.
 5. Install the [Renovate app](https://github.com/apps/renovate) on the shop's repository.
