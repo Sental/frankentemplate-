@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.28
+# syntax=docker/dockerfile:1.29
 # =============================================================================
 # Magento / Mage-OS on FrankenPHP: one Dockerfile, three targets.
 #
