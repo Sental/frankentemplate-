@@ -145,7 +145,7 @@ services:
       - backend
 
   {{PROJECT}}-mailpit:
-    image: axllent/mailpit:${MAILPIT_TAG:-v1.33.1}
+    image: axllent/mailpit:${MAILPIT_TAG:-v1.34.0}
     container_name: {{PROJECT}}-mailpit
     restart: unless-stopped
     logging: *logging
