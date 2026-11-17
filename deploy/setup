@@ -58,7 +58,8 @@ Options:
   --set KEY=VALUE        set any .env value; repeatable (e.g. --set OPENSEARCH_HEAP=512m)
 
   Database:
-  --import FILE          load this .sql or .sql.gz dump instead of installing
+  --import FILE          load this .sql or .sql.gz dump instead of installing. If setup fails
+                         after the load, re-run the same command: it carries on from there
   --from-env-php FILE    take the crypt key, install date, GraphQL salt, cache prefix, admin path
                          and cache state from an existing env.php (needed with --import)
 
@@ -81,6 +82,7 @@ Options:
   --repair               a new project setup didn't finish: re-run the worker-mode step.
                          A project without worker mode: add it.
                          A failed install: clean it up (and, on a re-run, install again).
+                         An import that didn't finish: drop it and load the dump again.
   --recreate             a new project setup didn't finish: delete it and create it again.
                          Never applies to a project setup didn't create.
 
@@ -110,8 +112,11 @@ Options:
   --image IMAGE          the app image to run (e.g. user/mage-os-app:abc1234); needed the first time.
                          Pulled unless it's already on this host, so a tag that moves (latest)
                          isn't refreshed
-  --import FILE          load this .sql or .sql.gz dump; needed the first time
+  --import FILE          load this .sql or .sql.gz dump; needed the first time. If setup fails
+                         after the load, re-run the same command: it carries on from there
   --from-env-php FILE    take the store's immutable values from its env.php (needed with --import)
+  --repair               an import that didn't finish: drop it and load the dump again, without
+                         asking (in a terminal, setup asks)
   --secrets FILE         start from a SOPS-encrypted .env (deploy/secrets/<env>.env); needs the age key
   --deploy-user USER     the user CI deploys as (default deploy)
   --deploy-key FILE      a public key to add to that user's authorized_keys
@@ -353,8 +358,9 @@ setup_dev() {
         install_offer_cleanup "a previous install in $(magento_root) failed and wasn't cleaned up." "$RESUME"
     fi
 
-    if [ -n "$IMPORT" ]; then
-        install_import "$IMPORT"
+    # An import, or one an earlier run didn't finish (lib/install.sh).
+    if [ -n "$IMPORT" ] || [ -n "$(import_state)" ]; then
+        install_import "$IMPORT" "$RESUME"
     elif ! installed; then
         local tables
         tables=$(db_table_count)
@@ -407,7 +413,10 @@ setup_dev() {
         # the database (a dump from elsewhere, worker mode just added).
         "$STACK_ROOT/bin/magento" setup:upgrade
         "$STACK_ROOT/bin/magento" cache:flush
-        [ -n "$IMPORT" ] && "$STACK_ROOT/bin/magento" indexer:reindex
+        if [ "$(import_state)" = imported ]; then
+            "$STACK_ROOT/bin/magento" indexer:reindex
+            import_done
+        fi
         # Worker mode: the workers loaded their classes before setup:upgrade. Cron isn't
         # running yet. Any indexer left invalid, cron rebuilds within its first minute.
         "$STACK_ROOT/bin/restart" app consumers
@@ -542,9 +551,8 @@ setup_server() {
         "$(service rabbitmq)" "$(service opensearch)"
     # OpenSearch reads its security files only once, when it creates its security index.
     "$STACK_ROOT/bin/opensearch-security"
-    if [ -n "$IMPORT" ]; then
-        install_import "$IMPORT"
-    fi
+    # Also picks up an import an earlier run didn't finish (lib/install.sh).
+    install_import "$IMPORT" "$RESUME"
     installed || die "no store yet. A server starts from an existing store: pass --import <dump> --from-env-php <env.php>."
 
     # Cron starts last, as in setup_dev: its reindex would race setup's.
@@ -554,16 +562,20 @@ setup_server() {
     # The SMTP password goes into the database once, when the store is installed; the
     # admin changes it after that. After setup:upgrade, because config:set refuses to run
     # while the config hash is out of date. The value reaches the container through the
-    # environment (-e with only the name), never a command line.
+    # environment (-e with only the name), never a command line. "Once" is while the
+    # import is unfinished, so a re-run after a failure stores it again.
     # deploy/lib/smtp-password.container.php says why it isn't in env.php.
-    if [ -n "$IMPORT" ] && [ -n "$(env_get SMTP_PASSWORD)" ]; then
+    if [ "$(import_state)" = imported ] && [ -n "$(env_get SMTP_PASSWORD)" ]; then
         info "storing SMTP_PASSWORD in the database, encrypted by Magento"
         SMTP_PASSWORD=$(env_get SMTP_PASSWORD) docker exec -i -u www-data -e SMTP_PASSWORD \
             "$(app_service)" php < "$DEPLOY_DIR/lib/smtp-password.container.php" \
-            || die "storing SMTP_PASSWORD failed (above). The store is installed; set the password in the admin, or fix the cause and re-run setup with --import on an empty database."
+            || die "storing SMTP_PASSWORD failed (above). Fix the cause, then re-run the same setup command: it continues after the import."
     fi
     "$STACK_ROOT/bin/magento" cache:flush
-    [ -n "$IMPORT" ] && "$STACK_ROOT/bin/magento" indexer:reindex
+    if [ "$(import_state)" = imported ]; then
+        "$STACK_ROOT/bin/magento" indexer:reindex
+        import_done
+    fi
     info "starting cron"
     compose up -d --wait "$(service cron)"
 

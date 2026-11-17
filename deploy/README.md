@@ -267,6 +267,13 @@ through Dashboards or the security REST API is reverted on the next setup run.
   wrote (and restores the previous one), drops and recreates the database it filled, and turns
   maintenance mode off. If you say no, or setup never got to ask, the next run asks first. Without a
   terminal, `--repair` answers yes.
+- **Setup failed after loading a dump** (`--import`, dev or server): re-run the same command. It skips
+  the load and carries on with what follows it: `setup:upgrade`, on a server the SMTP password, and the
+  reindex. The reindex is what fills this stack's OpenSearch.
+- **The load itself didn't finish** (an error, Ctrl-C, a reboot): the database holds part of the dump.
+  The next run with `--import` asks whether to drop it and load the dump again. Without a terminal,
+  `--repair` answers yes. setup does this only for a database it found empty before the load; it
+  records each import's progress in `.stack/install/import`.
 - **An installer step timed out** ("exceeded the timeout of 30 seconds"): the installer gives its
   post-install steps fixed time limits, and a timeout stops the whole install, even though
   `setup:install` has finished. `var/log/stack-install-timing.log`, in the Magento root, has one

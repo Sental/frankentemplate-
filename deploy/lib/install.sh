@@ -23,6 +23,9 @@
 # The pending file is the proof that the leftovers are the failed install's own: setup
 # writes it only for a database it has just checked is empty, so the clean-up may drop
 # that database and nothing else.
+#
+# The dump route is install_import, at the end. It keeps a state file of its own, so a
+# re-run after a failure can carry on (the section there says how).
 # =============================================================================
 
 resume_file() { printf '%s/var/.mageos-install-config.json' "$(magento_root)"; }
@@ -31,6 +34,22 @@ resume_file() { printf '%s/var/.mageos-install-config.json' "$(magento_root)"; }
 db_table_count() {
     "$STACK_ROOT/bin/mysql" -N -B -e 'SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE()' \
         | tr -d '[:space:]'
+}
+
+# db_recreate STATE_FILE: drops and recreates Magento's database, as Magento's own
+# database user. Only for a database that a state file proves holds nothing but setup's
+# own failed work: the installer's pending file, or the import's. The refusal message
+# names STATE_FILE.
+db_recreate() {
+    local file=$1 db
+    db=$(env_get DB_NAME magento)
+    # Only a plain name goes into the SQL: anything but letters, digits and
+    # underscores is refused, not escaped.
+    [[ "$db" =~ ^[A-Za-z0-9_]+$ ]] \
+        || die "DB_NAME '$db' has characters setup won't put into a DROP DATABASE. Drop and recreate it yourself, then delete $file."
+    info "dropping and recreating database '$db'"
+    # What setup:install's own --cleanup-database does, as the same user.
+    "$STACK_ROOT/bin/mysql" -e "DROP DATABASE IF EXISTS \`$db\`; CREATE DATABASE \`$db\`"
 }
 
 # install_preseed ADMIN_PASSWORD SAMPLE_DATA(0|1) HYVA(0|1) LOCALE CURRENCY TIMEZONE
@@ -216,10 +235,9 @@ install_offer_cleanup() {
 # install_cleanup: puts back what the failed install changed. Only called while
 # install_pending holds, so the database is provably the failed install's own.
 install_cleanup() {
-    local dir root db file
+    local dir root file
     dir=$(install_state_dir)
     root=$(magento_root)
-    db=$(env_get DB_NAME magento)
     file=$(install_pending_file)
     [ "$(dotenv_get "$file" tables_before)" = "0" ] \
         || die "$file says the database wasn't empty before the install, so setup won't drop it. Check it yourself, then delete $file."
@@ -233,13 +251,7 @@ install_cleanup() {
         rm -f "$root/var/.maintenance.flag"
     fi
     if [ "$(db_table_count)" != "0" ]; then
-        # Only a plain name goes into the SQL: anything but letters, digits and
-        # underscores is refused, not escaped.
-        [[ "$db" =~ ^[A-Za-z0-9_]+$ ]] \
-            || die "DB_NAME '$db' has characters setup won't put into a DROP DATABASE. Drop and recreate it yourself, then delete $file."
-        info "dropping and recreating database '$db'"
-        # What setup:install's own --cleanup-database does, as the same user.
-        "$STACK_ROOT/bin/mysql" -e "DROP DATABASE IF EXISTS \`$db\`; CREATE DATABASE \`$db\`"
+        db_recreate "$file"
     fi
     rm -f "$file"
     info "cleaned up: the installer can run again"
@@ -259,16 +271,92 @@ install_capture() {
         /usr/local/lib/stack/generate-env-php.php --diff || true
 }
 
-# install_import FILE: loads a .sql or .sql.gz dump into an empty database.
+# -----------------------------------------------------------------------------
+# A dump, and carrying on after a failure
+# -----------------------------------------------------------------------------
+# install_import records its progress in .stack/install/import:
+#   state=importing  the load has started, into a database that was checked empty. If
+#                    setup stops before the load ends (an error, Ctrl-C, a reboot), the
+#                    database holds part of the dump.
+#   state=imported   the load finished. The steps that follow an import (on a server the
+#                    SMTP password, and the reindex) haven't all run yet.
+# import_done deletes the file once they have. A re-run reads it: after `imported` it skips
+# the load and runs those steps; after `importing` it offers to drop the partial import and
+# load the dump again. The reindex matters: it fills this stack's OpenSearch, which a dump
+# doesn't carry, and cron won't, because cron rebuilds only invalid indexes and the dump's
+# indexer table can say every one is valid.
+#
+# Like the installer's pending file, the state is written only for a database setup has
+# just checked is empty, so dropping it can lose nothing but the import.
+import_state_file() { printf '%s/import' "$(install_state_dir)"; }
+
+# import_state: importing or imported while an import is unfinished; empty otherwise.
+import_state() { dotenv_get "$(import_state_file)" state; }
+
+# import_done: the steps after the import have run, so the next setup run is an ordinary one.
+import_done() { rm -f "$(import_state_file)"; }
+
+# import_record STATE FILE
+import_record() {
+    mkdir -p "$(install_state_dir)"
+    printf 'state=%s\nfile=%s\ndb=%s\n' "$1" "$2" "$(env_get DB_NAME magento)" > "$(import_state_file)"
+}
+
+# install_import FILE CHOICE: loads a .sql or .sql.gz dump into an empty database, or picks
+# up an import an earlier run didn't finish. FILE is empty when --import wasn't passed.
+# CHOICE repair drops a partial import without asking.
 install_import() {
-    local file=$1 tables
-    [ -f "$file" ] || die "--import: no such file: $file"
+    local file=$1 choice=${2:-} previous tables
+    [ -z "$file" ] || [ -f "$file" ] || die "--import: no such file: $file"
+    previous=$(dotenv_get "$(import_state_file)" file)
+    case "$(import_state)" in
+        imported)
+            info "continuing after the import of $previous, which finished in an earlier run"
+            return 0
+            ;;
+        importing)
+            [ -n "$file" ] \
+                || die "the import of $previous didn't finish, so the database holds part of it. Re-run with --import <dump> and --from-env-php <env.php> to load it again."
+            import_offer_cleanup "$previous" "$choice"
+            ;;
+        *)
+            [ -n "$file" ] || return 0
+            ;;
+    esac
     tables=$(db_table_count)
     [ "$tables" = "0" ] \
         || die "the database already has $tables tables. --import loads only into an empty database (bin/stop -v deletes the volumes; mind MARIADB_DATA)."
+    import_record importing "$file"
     info "importing $file"
     case "$file" in
         *.gz) gunzip -c "$file" | "$STACK_ROOT/bin/mysql" ;;
         *)    "$STACK_ROOT/bin/mysql" < "$file" ;;
     esac
+    import_record imported "$file"
+}
+
+# import_offer_cleanup FILE CHOICE: an earlier run's import of FILE didn't finish. Says so,
+# and asks before dropping what it loaded; CHOICE repair answers yes. Returns once the
+# database is empty again; anything else stops setup.
+import_offer_cleanup() {
+    local file=$1 choice=$2 state_file db recorded tables answer
+    state_file=$(import_state_file)
+    db=$(env_get DB_NAME magento)
+    recorded=$(dotenv_get "$state_file" db)
+    [ "$recorded" = "$db" ] \
+        || die "$state_file records an unfinished import into database '$recorded', but DB_NAME is now '$db', so setup won't drop '$db'. Deal with '$recorded' yourself, then delete $state_file."
+    tables=$(db_table_count)
+    if [ "$tables" != "0" ]; then
+        warn "an earlier run's import of $file didn't finish, so database '$db' holds part of it ($tables tables)."
+        if [ "$choice" != repair ]; then
+            [ -t 0 ] || die "nothing has been changed. Re-run setup in a terminal to be asked, or with --repair to drop the partial import and load the dump again."
+            read -r -p "Drop it and load the dump again? [Y/n] " answer
+            case "$answer" in
+                ""|y|Y|yes|Yes) ;;
+                *) die "left as it is, so you can look at it. The next setup run with --import asks again." ;;
+            esac
+        fi
+        db_recreate "$state_file"
+    fi
+    rm -f "$state_file"
 }
