@@ -119,7 +119,7 @@ os_hash() {
 # version is in templates/compose.yaml.tpl (twice) and config/opensearch/Dockerfile;
 # Renovate updates all of them in one pull request.
 os_image() {
-    printf '%s-opensearch:%s' "$(project)" "$(env_get OPENSEARCH_TAG 3.9.0)"
+    printf '%s-opensearch:%s' "$(project)" "$(env_get OPENSEARCH_TAG 3.10.0)"
 }
 
 # os_hashes_ensure IMAGE: writes hashes.env if it's missing; an existing one is kept even

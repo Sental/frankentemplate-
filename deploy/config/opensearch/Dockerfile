@@ -5,7 +5,7 @@
 # the same way every time. Compose builds this image from the
 # rendered compose file, which passes OPENSEARCH_TAG. The default here matches compose's;
 # Renovate keeps the two equal.
-ARG OPENSEARCH_TAG=3.9.0
+ARG OPENSEARCH_TAG=3.10.0
 FROM opensearchproject/opensearch:${OPENSEARCH_TAG}
 
 # The `list` check keeps the build working if a future base image ships the plugin.
