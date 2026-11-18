@@ -268,3 +268,60 @@ php_exec() {
     # shellcheck disable=SC2086 # $tty is empty or exactly -T
     compose exec $tty -u www-data "$(app_service)" "$@"
 }
+
+# image_ensure IMAGE: pulls IMAGE only when it isn't on this host yet, as compose's
+# pull_policy: missing does. CI's tags never move (a commit hash, a release), so a local
+# copy is that image; it also lets an image built here with bin/build run without a
+# registry.
+image_ensure() {
+    if docker image inspect "$1" >/dev/null 2>&1; then
+        info "$1 is already on this host; not pulling it"
+    else
+        info "pulling $1"
+        docker pull "$1"
+    fi
+}
+
+base_url() {
+    local port
+    port=$(env_get HTTPS_PORT 443)
+    if [ "$port" = "443" ]; then
+        printf 'https://%s/' "$(env_get STORE_DOMAIN)"
+    else
+        printf 'https://%s:%s/' "$(env_get STORE_DOMAIN)" "$port"
+    fi
+}
+
+# smoke_server: the store's home page through this server's public path (Caddy, then
+# Varnish, then the app). It warns on failure and never stops the caller.
+smoke_server() {
+    local domain port url ip code rc=0 why
+    domain=$(env_get STORE_DOMAIN)
+    port=$(env_get HTTPS_PORT 443)
+    url=$(base_url)
+    # Straight at the local Caddy, with the real hostname and HTTPS_PORT, so this tests
+    # this server rather than Cloudflare. Caddy listens on BIND_ADDRESS, so that's where
+    # to connect; 0.0.0.0 (all addresses, the server default) includes 127.0.0.1.
+    # -k: the Let's Encrypt certificate may still be on its way.
+    ip=$(env_get BIND_ADDRESS 0.0.0.0)
+    case "$ip" in 0.0.0.0|::|"") ip=127.0.0.1 ;; esac
+    # Without an HTTP answer curl's status is 000, which tells a reader nothing; its exit
+    # code says why, so that's what the warning reports. `|| rc=$?` also keeps set -e from
+    # ending the caller over a failed check.
+    code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 30 \
+        --resolve "$domain:$port:$ip" "$url") || rc=$?
+    case "$rc" in
+        0)
+            case "$code" in
+                200|301|302) info "smoke check: $url answered $code from this server"; return 0 ;;
+                *) why="answered $code" ;;
+            esac
+            ;;
+        7)  why="couldn't connect to $ip:$port, where nothing is listening; Caddy may not be running" ;;
+        28) why="didn't answer within 30 seconds" ;;
+        35) why="failed the TLS handshake: Caddy may not have a certificate for $domain yet" ;;
+        52) why="closed the connection without answering" ;;
+        *)  why="couldn't be reached (curl exit code $rc; see EXIT CODES in man curl)" ;;
+    esac
+    warn "smoke check: $url $why. Look at bin/log caddy, bin/log varnish and bin/log app."
+}

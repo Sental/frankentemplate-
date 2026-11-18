@@ -1,0 +1,497 @@
+#!/usr/bin/env bash
+# bin/release <image>      put <image> live on this server
+# bin/release --rollback   put the image from before the last release back
+#
+# Servers only. In place: the active colour's app is replaced by one on the new image.
+# Blue/green builds on this later, replacing the steps from "the app stops" to "the VCL
+# is reloaded".
+#
+# Before the window, with the store fully up:
+#   1. The image is pulled unless it's on this host, and so is the one that's live, so
+#      a failed release can go back to it without a download.
+#   2. Varnish loads the rendered VCL as a check. A throwaway container of the image
+#      runs setup:db:status and app:config:status, which say whether the schema or the
+#      config needs work.
+#   3. A release that changes the schema takes a snapshot of the database: the last
+#      resort if going back fails too.
+#   4. Cron and the consumers stop.
+# The window. Varnish's backend is forced sick: Varnish answers everything it has
+# cached, past its TTL too (3 days' grace), and nothing reaches the app.
+#   5. The app stops.
+#   6. A throwaway container of the image, with Varnish purging off, runs
+#      maintenance:enable, setup:upgrade --safe-mode=1 and cache:flush when the schema
+#      changes; app:config:import and cache:flush when only config does; otherwise
+#      cache:flush. The caches must be empty before the new app boots: in worker mode
+#      each thread keeps what it read at boot for its whole life.
+#   7. The app starts on the image.
+#   8. Maintenance off, if it was on. Varnish still keeps the public out.
+#   9. The smoke check, straight at the new app: what the public would get.
+#  10. The VCL is reloaded. It resolves the new container and drops the forced state:
+#      the release is public.
+# After the window: Varnish is purged, the public path through Caddy and Varnish is
+# checked (a warning only), cron and the consumers start on the image, and
+# deploy/hooks/post-release.sh runs.
+#
+# A step from 1 to 4 that fails stops the release, and nothing has changed. If a step
+# from 5 to 10 fails, the image that was live goes back the way --rollback puts it back,
+# inside the same window. If that fails too, bin/release stops and says what state the
+# store is in.
+#
+# --rollback releases the image from before the last release. When its code needs the
+# schema changed back, its setup:upgrade runs with --data-restore=1: what the last
+# release dropped comes back from the safe-mode dumps in var/, while what it added
+# stays, and so do its data patches. Every write since the release is kept. It takes no
+# snapshot, and a rollback that fails isn't undone: bin/release stops and says why.
+# shellcheck source=_lib.sh
+. "$(dirname "$0")/_lib.sh"
+
+usage() {
+    cat >&2 <<'USAGE'
+Usage:
+  bin/release <image>      put <image> live on this server, in place on the active colour
+  bin/release --rollback   put the image from before the last release back
+
+Every step is in the comment at the top of deploy/bin/release. What to do when a
+release fails is in deploy/README.md.
+USAGE
+    exit "${1:-1}"
+}
+
+KIND=release
+IMAGE=
+case "${1:-}" in
+    -h|--help)  usage 0 ;;
+    --rollback) KIND=rollback ;;
+    ""|-*)      usage ;;
+    *)          IMAGE=$1 ;;
+esac
+[ $# -eq 1 ] || usage
+
+require_env_file
+if is_dev; then
+    die "servers only: STACK_ENV is dev. In dev, bin/deploy does the equivalent."
+fi
+
+COLOR=$(env_get ACTIVE_COLOR blue)
+COLOR_UC=${COLOR^^}
+APP=$(app_service)
+CRON=$(service cron)
+CONSUMERS=$(service consumers)
+VARNISH=$(service varnish)
+DATA_DIR=$(env_get DATA_DIR "$STACK_ROOT/data")
+STATE_DIR="$STACK_ROOT/.stack/release"
+STATE_FILE="$STATE_DIR/last"
+MAINTENANCE_FLAG="$DATA_DIR/var/.maintenance.flag"
+
+# The store's state, for the exit trap. Each one is set the moment it becomes true.
+WINDOW_OPEN=0
+WINDOW_START=0
+WINDOW_AT=
+MAINT_ON=0
+BG_STOPPED=0
+# The image that was live, for going back to. Empty when there's nothing else.
+GO_BACK_TO=
+NEED_SCHEMA=0
+NEED_CONFIG=0
+SNAPSHOT=
+SNAPSHOT_AT=
+FAILED=
+
+install -d "$STATE_DIR"
+exec 9> "$STATE_DIR/lock"
+flock -n 9 || die "another bin/release is running on this stack"
+
+# The newest snapshot, from an earlier release, while its file is still there.
+KEPT_SNAPSHOT=$(dotenv_get "$STATE_FILE" snapshot)
+KEPT_SNAPSHOT_AT=$(dotenv_get "$STATE_FILE" snapshot_at)
+if [ -n "$KEPT_SNAPSHOT" ] && [ ! -e "$KEPT_SNAPSHOT" ]; then
+    KEPT_SNAPSHOT=
+    KEPT_SNAPSHOT_AT=
+fi
+
+utc_now() { date -u '+%Y-%m-%d %H:%M:%S UTC'; }
+
+# step MESSAGE: progress. While the window is open, with the seconds since it opened.
+step() {
+    if [ "$WINDOW_OPEN" = 1 ]; then
+        info "[window +$(( SECONDS - WINDOW_START ))s] $*"
+    else
+        info "$*"
+    fi
+}
+
+vadm() { compose exec -T "$VARNISH" varnishadm "$@"; }
+
+# vadm_q ARGS...: varnishadm, printing its answer only when it fails.
+vadm_q() {
+    local out
+    out=$(vadm "$@" 2>&1) || { printf '%s\n' "$out" >&2; return 1; }
+}
+
+app_magento() { compose exec -T -u www-data "$APP" php bin/magento "$@"; }
+
+# on_exit: when bin/release stops with the window still open (a failure it couldn't
+# undo, Ctrl-C, SIGTERM), says what state the store is in and how to get out of it.
+# A SIGKILL or a power cut runs no trap: the store stays in the window, silently, until
+# the next bin/release.
+on_exit() {
+    local snap snap_at
+    if [ "$WINDOW_OPEN" = 1 ]; then
+        snap=${SNAPSHOT:-$KEPT_SNAPSHOT}
+        snap_at=${SNAPSHOT_AT:-$KEPT_SNAPSHOT_AT}
+        {
+            printf '\n'
+            printf 'release: THE STORE IS ONLY PARTLY UP.\n'
+            printf '  Varnish answers from its cache only. Its backend is forced sick, so nothing reaches\n'
+            printf '  the app: uncached pages, the cart, checkout and the admin fail.\n'
+            if [ -e "$MAINTENANCE_FLAG" ]; then
+                printf '  MAINTENANCE MODE IS ON.\n'
+            fi
+            printf '  Cron and the consumers are stopped.\n'
+            printf '  Since %s, when the window opened, only bin/release has written to the database.\n' "$WINDOW_AT"
+            printf '  To get out: find the cause above, then bin/release <an image that works>. A release\n'
+            printf '  opens the window again and closes it.\n'
+            if [ -n "$GO_BACK_TO" ]; then
+                printf '  The image live before this release: %s\n' "$GO_BACK_TO"
+            fi
+            if [ -n "$snap" ]; then
+                printf '  Last resort: %s holds the database as it was at %s.\n' "$snap" "$snap_at"
+                printf '  Restoring it loses every write after that (deploy/README.md, "When a release fails").\n'
+            fi
+        } >&2
+    elif [ "$BG_STOPPED" = 1 ]; then
+        warn "cron and the consumers are stopped: bin/start cron consumers starts them"
+    fi
+}
+trap on_exit EXIT
+
+preflight() {
+    local svc
+    if [ -z "$(env_get CRYPT_KEY)" ] || [ -z "$(env_get INSTALL_DATE)" ]; then
+        die "no store on this server yet. deploy/setup server --import <dump> --from-env-php <env.php> comes first."
+    fi
+    for svc in varnish mariadb valkey-session valkey-cache rabbitmq opensearch; do
+        if [ -z "$(compose ps -q --status running "$(service "$svc")")" ]; then
+            die "$(service "$svc") isn't running. Start the stack first: bin/start"
+        fi
+    done
+}
+
+# oneoff IMAGE COMMAND...: runs COMMAND in a throwaway container of the active colour's
+# app service on IMAGE. The full_page cache type is off in it, so nothing it does
+# purges Varnish: both of Magento's purge observers skip when it's off, and Varnish's
+# cache is what the public sees until the release is public.
+oneoff() {
+    local image=$1
+    shift
+    (
+        export "APP_IMAGE_$COLOR_UC=$image"
+        compose run --rm --no-deps -T \
+            -e MAGENTO_CACHE_DISABLED="$(env_get MAGENTO_CACHE_DISABLED) full_page" \
+            "$APP" "$@"
+    )
+}
+
+# oneoff_image_check IMAGE: oneoff picks the image through the shell's
+# APP_IMAGE_<COLOUR>, which Compose prefers to .env's. This asks Compose what that
+# resolves to, so if the precedence ever changed, the release would stop here rather
+# than check and upgrade with the wrong image. `config --images` lists the images of
+# the app and of every service it depends on, one per line, so IMAGE must be one line.
+oneoff_image_check() {
+    local image=$1 got
+    got=$(export "APP_IMAGE_$COLOR_UC=$image"; compose config --images "$APP") \
+        || die "compose config failed (above). Nothing has changed."
+    grep -qxF -- "$image" <<< "$got" \
+        || die "a throwaway container of $APP wouldn't run $image. Compose resolves it and its dependencies to: $(tr '\n' ' ' <<< "$got"). Nothing has changed."
+}
+
+# release_status IMAGE: sets NEED_SCHEMA and NEED_CONFIG from IMAGE's setup:db:status
+# and app:config:status. Both exit 2 when work is needed, 1 when they fail.
+release_status() {
+    local image=$1 out db config
+    step "asking $image what it needs (setup:db:status, app:config:status)"
+    # shellcheck disable=SC2016 # $? expands in the container
+    if ! out=$(oneoff "$image" bash -c \
+            'php bin/magento setup:db:status; echo "release-status db=$?"; php bin/magento app:config:status; echo "release-status config=$?"' 2>&1); then
+        printf '%s\n' "$out" >&2
+        FAILED="the status check couldn't run in a container of $image (above)"
+        return 1
+    fi
+    printf '%s\n' "$out" | grep -v '^release-status ' >&2
+    db=$(sed -n 's/^release-status db=//p' <<< "$out")
+    config=$(sed -n 's/^release-status config=//p' <<< "$out")
+    case "$db" in
+        0) NEED_SCHEMA=0 ;;
+        2) NEED_SCHEMA=1 ;;
+        *) FAILED="setup:db:status failed in $image (exit ${db:-unknown}, above)"; return 1 ;;
+    esac
+    case "$config" in
+        0) NEED_CONFIG=0 ;;
+        2) NEED_CONFIG=1 ;;
+        *) FAILED="app:config:status failed in $image (exit ${config:-unknown}, above)"; return 1 ;;
+    esac
+    if [ "$NEED_SCHEMA" = 1 ]; then
+        step "$image needs setup:upgrade"
+    elif [ "$NEED_CONFIG" = 1 ]; then
+        step "$image needs app:config:import"
+    else
+        step "$image needs neither setup:upgrade nor app:config:import"
+    fi
+}
+
+snapshot_dir() { printf '%s/snapshots' "$DATA_DIR"; }
+
+# snapshot_take: a dump of the database before a release that changes the schema. It's
+# the last resort, and only a person restores it: a restore loses every write made
+# after SNAPSHOT_AT. Taken before the window, so it costs the store no downtime.
+snapshot_take() {
+    local dir file db_bytes free_kib
+    dir=$(snapshot_dir)
+    install -d -m 0700 "$dir" || die "can't create $dir for the snapshot. Nothing has changed."
+    # The dump mustn't fill the disk under a live database. The tables' size on disk is
+    # more than their dump, compressed, needs.
+    db_bytes=$("$STACK_ROOT/bin/mysql" -N -e \
+        'SELECT COALESCE(SUM(data_length + index_length), 0) FROM information_schema.tables WHERE table_schema = DATABASE()') \
+        || die "can't read the database's size (above). Nothing has changed."
+    free_kib=$(df -Pk "$dir" | awk 'NR == 2 { print $4 }')
+    if [ "$(( free_kib * 1024 ))" -le "$db_bytes" ]; then
+        die "$dir has $(( free_kib / 1024 )) MiB free and the database takes $(( db_bytes / 1048576 )) MiB, so the snapshot might fill the disk. Free some space. Nothing has changed."
+    fi
+    file="$dir/release-$(date -u +%Y%m%dT%H%M%SZ).sql.gz"
+    SNAPSHOT_AT=$(utc_now)
+    step "snapshot of the database: $file"
+    if ! ( umask 077; "$STACK_ROOT/bin/mysqldump" | gzip > "$file.part" ); then
+        rm -f "$file.part"
+        die "the snapshot failed (above). Nothing has changed."
+    fi
+    mv "$file.part" "$file"
+    SNAPSHOT=$file
+}
+
+# snapshot_prune: after a release that took a snapshot, the older ones go. Each holds
+# the database further back, so restoring one would lose more.
+snapshot_prune() {
+    local f
+    for f in "$(snapshot_dir)"/release-*.sql.gz; do
+        [ -e "$f" ] || continue
+        [ "$f" = "$SNAPSHOT" ] && continue
+        rm -f "$f"
+        info "removed the older snapshot $f"
+    done
+}
+
+background_stop() {
+    step "stopping cron and the consumers"
+    BG_STOPPED=1
+    compose stop "$CRON" "$CONSUMERS"
+}
+
+background_start() {
+    step "starting cron and the consumers on $(env_get APP_IMAGE_ACTIVE)"
+    compose up -d --wait --no-deps "$CRON" "$CONSUMERS" || return 1
+    BG_STOPPED=0
+}
+
+window_open() {
+    vadm_q backend.set_health default sick || return 1
+    WINDOW_OPEN=1
+    WINDOW_START=$SECONDS
+    WINDOW_AT=$(utc_now)
+    step "Varnish's backend is forced sick: Varnish answers from its cache, and nothing reaches the app"
+}
+
+# smoke_app: the new app, asked straight (not through Caddy or Varnish) for the home
+# page, the way the public will ask for it: the store's host name, over HTTPS as Caddy
+# reports it. The same answers pass as in setup's check of the public path.
+smoke_app() {
+    local host out code
+    host=$(base_url)
+    host=${host#https://}
+    host=${host%/}
+    out=$(compose exec -T "$APP" curl -s -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 60 \
+        -H "Host: $host" -H 'X-Forwarded-Proto: https' http://localhost/) || true
+    code=${out%% *}
+    case "$code" in
+        200)
+            step "smoke check: $APP answered 200 for https://$host/"
+            return 0
+            ;;
+        301|302)
+            step "smoke check: $APP answered $code for https://$host/, a redirect to ${out#* }"
+            return 0
+            ;;
+    esac
+    FAILED="the smoke check: $APP answered ${code:-nothing} for https://$host/"
+    return 1
+}
+
+# vcl_reload: loads the rendered VCL under a new name and makes it the active one. It
+# resolves the app's container afresh, and its backend has no forced state. The old
+# VCL is discarded.
+vcl_reload() {
+    local name old
+    name="release_$(date -u +%Y%m%dT%H%M%S)_$$"
+    old=$(vadm vcl.list | awk '$1 == "active" { print $NF }') || return 1
+    vadm_q vcl.load "$name" /etc/varnish/stack/default.vcl || return 1
+    vadm_q vcl.use "$name" || return 1
+    if [ -n "$old" ]; then
+        vadm_q vcl.discard "$old" \
+            || warn "the old VCL $old wasn't discarded: varnishadm vcl.discard $old"
+    fi
+}
+
+# vcl_check: loads the rendered VCL under a throwaway name, then discards it. A VCL
+# that doesn't compile, or whose backend doesn't resolve, then stops the release before
+# the window rather than at its end, where going back would need the same reload.
+vcl_check() {
+    local name="release_check_$$"
+    step "checking that Varnish loads the rendered VCL"
+    vadm_q vcl.load "$name" /etc/varnish/stack/default.vcl \
+        || die "Varnish can't load the rendered VCL (above). Nothing has changed."
+    vadm_q vcl.discard "$name" \
+        || warn "the check's VCL $name wasn't discarded: varnishadm vcl.discard $name"
+}
+
+# window_work IMAGE KIND: steps 5 to 10. KIND is release or rollback; a rollback's
+# setup:upgrade also restores what the last release dropped. Returns non-zero with
+# FAILED saying why, leaving the window open.
+window_work() {
+    local image=$1 kind=$2 restore="" script what
+    [ "$kind" = rollback ] && restore=" --data-restore=1"
+    step "stopping $APP"
+    compose stop "$APP" || { FAILED="$APP didn't stop"; return 1; }
+    if [ "$NEED_SCHEMA" = 1 ]; then
+        MAINT_ON=1
+        script="php bin/magento maintenance:enable && php bin/magento setup:upgrade --keep-generated --safe-mode=1$restore --no-interaction && php bin/magento cache:flush"
+        what="maintenance:enable, setup:upgrade --safe-mode=1$restore, cache:flush"
+    elif [ "$NEED_CONFIG" = 1 ]; then
+        script="php bin/magento app:config:import --no-interaction && php bin/magento cache:flush"
+        what="app:config:import, cache:flush"
+    else
+        script="php bin/magento cache:flush"
+        what="cache:flush"
+    fi
+    step "$what, in a throwaway container of $image"
+    oneoff "$image" bash -c "$script" || { FAILED="$what failed in a container of $image (above)"; return 1; }
+    env_set "APP_IMAGE_$COLOR_UC" "$image"
+    env_set APP_IMAGE_ACTIVE "$image"
+    step "starting $APP on $image"
+    compose up -d --wait --no-deps "$APP" || { FAILED="$APP on $image didn't become healthy (above)"; return 1; }
+    if [ "$MAINT_ON" = 1 ]; then
+        step "maintenance off; Varnish still keeps the public out"
+        app_magento maintenance:disable || { FAILED="maintenance:disable failed (above)"; return 1; }
+        MAINT_ON=0
+    fi
+    smoke_app || return 1
+    step "reloading Varnish's VCL: $image goes public"
+    vcl_reload || { FAILED="the VCL reload failed (above)"; return 1; }
+    info "$image is public. The window lasted $(( SECONDS - WINDOW_START ))s."
+    WINDOW_OPEN=0
+}
+
+after_window() {
+    local image=$1
+    step "purging Varnish: everything in it came from the image before"
+    vadm_q "ban req.url ~ /" \
+        || warn "the Varnish purge failed: pages cached before the release are served until they expire. bin/cache-flush purges them."
+    smoke_server
+    background_start || die "$image is live, but cron and the consumers didn't start (above)"
+}
+
+# state_write IMAGE PREVIOUS: the record --rollback reads. PREVIOUS is empty after a
+# rollback, so a second --rollback doesn't swap back.
+state_write() {
+    local tmp="$STATE_FILE.tmp.$$"
+    {
+        printf '# Written by bin/release after each release. bin/release --rollback releases "previous".\n'
+        printf 'image=%s\n' "$1"
+        printf 'previous=%s\n' "$2"
+        printf 'schema_upgraded=%s\n' "$NEED_SCHEMA"
+        printf 'snapshot=%s\n' "${SNAPSHOT:-$KEPT_SNAPSHOT}"
+        printf 'snapshot_at="%s"\n' "${SNAPSHOT_AT:-$KEPT_SNAPSHOT_AT}"
+        printf 'released_at="%s"\n' "$(utc_now)"
+    } > "$tmp"
+    mv "$tmp" "$STATE_FILE"
+}
+
+hook_run() {
+    local image=$1 hook="$DEPLOY_DIR/hooks/post-release.sh"
+    [ -f "$hook" ] || return 0
+    step "running hooks/post-release.sh"
+    (
+        cd "$STACK_ROOT"
+        export STACK_ROOT
+        SCHEMA_UPGRADED=$NEED_SCHEMA bash "$hook"
+    ) || die "$image is live, but hooks/post-release.sh failed (above)"
+}
+
+# recover FAILED_IMAGE: the new image failed inside the window, so the image that was
+# live goes back, in the same window.
+recover() {
+    local failed=$1 why=$FAILED
+    warn "$why"
+    if [ "$KIND" = rollback ]; then
+        die "the rollback to $failed failed: $why"
+    fi
+    [ -n "$GO_BACK_TO" ] || die "the release of $failed failed, and there's no other image to go back to"
+    step "putting $GO_BACK_TO back"
+    release_status "$GO_BACK_TO" || die "putting $GO_BACK_TO back failed: $FAILED"
+    window_work "$GO_BACK_TO" rollback || die "putting $GO_BACK_TO back failed: $FAILED"
+    after_window "$GO_BACK_TO"
+    state_write "$GO_BACK_TO" ""
+    hook_run "$GO_BACK_TO"
+    die "the release of $failed failed: $why. $GO_BACK_TO is live again."
+}
+
+# -----------------------------------------------------------------------------
+
+if [ "$KIND" = rollback ]; then
+    [ -f "$STATE_FILE" ] || die "bin/release hasn't released anything on this server yet, so there's nothing to roll back to"
+    IMAGE=$(dotenv_get "$STATE_FILE" previous)
+    [ -n "$IMAGE" ] \
+        || die "the last release, $(dotenv_get "$STATE_FILE" image), put an earlier image back itself, so there's no previous one. Release an image by name."
+fi
+
+preflight
+GO_BACK_TO=$(env_get "APP_IMAGE_$COLOR_UC")
+info "releasing $IMAGE on $APP, in place of ${GO_BACK_TO:-nothing}"
+if [ "$GO_BACK_TO" = "$IMAGE" ]; then
+    info "$IMAGE is live already: releasing it again"
+    GO_BACK_TO=
+fi
+if [ -e "$MAINTENANCE_FLAG" ]; then
+    info "maintenance mode is on (an earlier release that failed, or by hand). It goes off once the new app passes its check."
+    MAINT_ON=1
+fi
+
+image_ensure "$IMAGE"
+if [ -n "$GO_BACK_TO" ]; then
+    image_ensure "$GO_BACK_TO"
+fi
+oneoff_image_check "$IMAGE"
+vcl_check
+release_status "$IMAGE" || die "$FAILED. Nothing has changed."
+if [ "$KIND" = release ] && [ "$NEED_SCHEMA" = 1 ]; then
+    snapshot_take
+fi
+
+background_stop
+if ! window_open; then
+    # A failed start leaves BG_STOPPED at 1, and the exit trap says so.
+    background_start || true
+    die "Varnish's backend couldn't be forced sick (above). Nothing else has changed."
+fi
+if ! window_work "$IMAGE" "$KIND"; then
+    recover "$IMAGE"
+fi
+after_window "$IMAGE"
+if [ "$KIND" = release ]; then
+    state_write "$IMAGE" "$GO_BACK_TO"
+else
+    state_write "$IMAGE" ""
+fi
+if [ -n "$SNAPSHOT" ]; then
+    snapshot_prune
+fi
+hook_run "$IMAGE"
+info "$IMAGE is live on $APP"

@@ -2,14 +2,14 @@
 #
 # Server overlay (staging and production), on top of compose.yaml.
 #
-# Blue/green: two app services, only one of them active. COMPOSE_PROFILES (set by
-# bin/render from ACTIVE_COLOR) starts only the active colour. A release starts the
-# idle colour on the new image, smoke-tests it directly, points Varnish at it with a
-# VCL reload, then stops the old one. Each colour pins its own image, so the old
-# colour keeps running its own code until it's stopped.
+# Two app services, blue and green, only one of them active. COMPOSE_PROFILES (set by
+# bin/render from ACTIVE_COLOR) starts only the active colour. bin/release replaces the
+# active colour in place, on the new image. The idle colour is for blue/green, which
+# isn't built yet: it would start the new image there, beside the old one, and switch
+# Varnish over. Each colour pins its own image and has its own cache namespace.
 #
 # Cron and consumers run the active colour's image and cache namespace. bin/release
-# recreates them after each switch.
+# recreates them after each release.
 
 x-server-php: &server-php
   scale: 1

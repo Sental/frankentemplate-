@@ -138,6 +138,8 @@ All of these are in the root `.gitignore`. Never commit them.
 | `.stack/caddy/`, `.stack/varnish/` | the rendered Caddyfile and VCL |
 | `.stack/opensearch/` | certificates, the CA's private key (never mounted anywhere), password hashes and the security files |
 | `.stack/new-project`, `.stack/install/` | setup's record of a new project or an install that hasn't finished (see [When something fails](#when-something-fails)) |
+| `.stack/release/` | servers: `bin/release`'s record of the last release, which `--rollback` reads |
+| `<DATA_DIR>/snapshots/` | servers: the database snapshot from the last release that changed the schema. Mode 0700. |
 | `bin` | a link to `deploy/bin` |
 
 `bin/render` regenerates the rendered files from `.env` and the templates. `bin/start` runs it for you.
@@ -193,6 +195,7 @@ On a dev machine, what setup does depends on what it finds:
 | `bin/mysql`, `bin/mysqldump` | the MariaDB client and dump tool, as the Magento user |
 | `bin/cache-flush` | flush Magento's caches and ban everything in Varnish |
 | `bin/deploy` | dev: setup:upgrade, di:compile, theme builds, static content for `LOCALES`, cache flush, PHP restart |
+| `bin/release <image>`, `bin/release --rollback` | servers: put an image live, or the one from before the last release back ([Releases](#releases)) |
 | `bin/phpunit …` | PHPUnit, from `dev/tests/unit` |
 | `bin/consumers list\|status\|restart` | which consumers exist and which `MAGENTO_CONSUMERS` runs, Supervisor's view, a restart |
 | `bin/xdebug on [mode]\|off\|status` | dev: Xdebug, triggered per request |
@@ -221,6 +224,56 @@ On a dev machine, what setup does depends on what it finds:
     add up to more than the host's RAM during a release.
   - `.env.example` has the sizing rule and what was measured in prod mode: about 35 MiB per web thread,
     about one web thread per CPU core, and OpenSearch's cap at least 1 GiB above its heap.
+
+## Releases
+
+`bin/release <image>` puts an image live on a server, in place: the active colour's app is replaced by
+one on the new image. The comment at the top of `deploy/bin/release` lists every step.
+
+- **The store is fully up until the window opens.** Before it, with everything running, the image is
+  pulled, a throwaway container of it says whether the schema or the config needs work, a release that
+  changes the schema takes a snapshot of the database, and cron and the consumers stop.
+- **In the window, Varnish answers from its cache only.** Its backend is forced sick, so it serves every
+  page it has cached, including pages past their TTL (three days' grace). Everything else fails:
+  uncached pages, the cart, checkout and the admin. The window covers stopping the app, the throwaway
+  container's work (`setup:upgrade` when the schema changes, otherwise a cache flush), the new app's
+  boot, the smoke check and a VCL reload. `bin/release` prints how long it lasted.
+- **Varnish's cache lasts until the release is public.** The throwaway containers run with the
+  `full_page` cache type off, so `setup:upgrade` and `cache:flush` don't purge Varnish. `bin/release`
+  purges it once the release is public.
+- **The smoke check gates the release.** It asks the new app directly for the home page, the way the
+  public will. The VCL reload that follows is what makes the release public. If the check, or anything
+  else in the window, fails, the image that was live goes back, inside the same window.
+- **`bin/release --rollback`** releases the image from before the last release. When that image's code
+  needs the schema changed back, its `setup:upgrade` runs with `--data-restore=1`: columns and tables the
+  last release dropped come back, from the dumps that `--safe-mode=1` writes to `var/` on every release.
+  What the last release added stays, and so do its data patches. Every write since the release is kept.
+  A rollback takes no snapshot.
+- **The snapshot** is the last resort: `<DATA_DIR>/snapshots/release-<UTC time>.sql.gz`, taken before the
+  window by each release that changes the schema. Once such a release succeeds, the older snapshots go.
+- **Blue/green isn't built yet.** It would start the new image on the idle colour, beside the old one,
+  and so remove the window's boot time.
+
+### When a release fails
+
+- **Before the window:** nothing has changed, and `bin/release` says why.
+- **In the window:** the image that was live goes back, in the same window, and `bin/release` fails
+  naming the cause. A failed `--rollback` isn't undone.
+- **If going back fails too,** the store stays in the window: Varnish answers from its cache, nothing
+  reaches the app, and cron and the consumers are stopped. `bin/release` prints that state, including
+  whether maintenance mode is on. Fix the cause, then run `bin/release` with an image that works; it opens
+  the window again and closes it.
+- **Restoring the snapshot** loses every write made after the time in its name: orders, payments the
+  payment provider has already taken, new customers. Only a person decides that. With the store in the
+  window:
+
+  ```bash
+  gunzip < <DATA_DIR>/snapshots/release-<UTC time>.sql.gz | bin/mysql
+  bin/release <the image that was live before>
+  ```
+
+  Every table in the dump goes back to the snapshot. Tables the failed release added stay, and the older
+  code ignores them.
 
 ## Dev URLs
 

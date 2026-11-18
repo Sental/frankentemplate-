@@ -7,7 +7,7 @@
 #   backend host   the active app: {{PROJECT}}-app in dev, {{PROJECT}}-app-<colour> on
 #                  a server. Varnish resolves it once, when this VCL loads, and refuses
 #                  to load if it doesn't resolve. That's why this names only the active
-#                  colour, and why a release reloads this VCL after switching.
+#                  colour, and why bin/release reloads this VCL once the new app is up.
 #   admin path     ADMIN_FRONT_NAME from .env, in both places it's needed.
 #
 # The purge ACL trusts the private address ranges, not hostnames or one subnet:
@@ -33,6 +33,11 @@ backend default {
         .interval = 5s;
         .window = 10;
         .threshold = 5;
+        # Healthy from the moment this VCL loads. Varnish's default, threshold - 1, holds
+        # a newly loaded VCL's backend sick until its first probe passes, up to 5 s.
+        # bin/release loads it only once the new app has passed its health check and
+        # the smoke check.
+        .initial = 5;
     }
 }
 
@@ -183,6 +188,14 @@ sub process_graphql_headers {
 }
 
 sub vcl_backend_response {
+    # A background refresh of a stale page that gets a server error is abandoned, so the
+    # stale copy stays cached and is still served (vcl_hit's grace), rather than the
+    # error taking the uncacheable branch below in its place. It matters whenever the app
+    # fails: maintenance mode, a release, an outage.
+    if (beresp.status >= 500 && bereq.is_bgfetch) {
+        return (abandon);
+    }
+
     # Keep the URL on the object, for URL-pattern bans.
     set beresp.http.x-url = bereq.url;
 
@@ -247,6 +260,14 @@ sub vcl_backend_response {
     }
 
     return (deliver);
+}
+
+# The same for a background refresh that couldn't reach the app at all: abandoning it
+# keeps the stale copy. Anything else falls through to Varnish's built-in error.
+sub vcl_backend_error {
+    if (bereq.is_bgfetch) {
+        return (abandon);
+    }
 }
 
 sub vcl_deliver {

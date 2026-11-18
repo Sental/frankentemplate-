@@ -8,7 +8,7 @@ directory. If the file exists it runs; if it doesn't, nothing happens.
 | --- | --- | --- | --- | --- |
 | `pre-composer.sh` | Image build, before `composer install` | The `build` stage | `/build` (the Magento root being built) | `HOOK_ENV` |
 | `post-composer.sh` | Image build, after `composer install` | The `build` stage | `/build` | `HOOK_ENV` |
-| `post-release.sh` | After `bin/release` has switched colours (`bin/release` is still being built) | The server host | The project root | `STACK_ROOT`, `SCHEMA_UPGRADED` (`1` or `0`) |
+| `post-release.sh` | After `bin/release` has put an image live, a rollback's included | The server host | The project root | `STACK_ROOT`, `SCHEMA_UPGRADED` (`1` or `0`) |
 
 ## Inputs
 
@@ -19,7 +19,9 @@ the hook `$MODULE_REF` and `$BUILD_ID`. CI passes it as a build argument; locall
 `bin/build` reads `HOOK_ENV` from `.env`. Values may not contain spaces.
 
 `post-release.sh` runs on the host, and can use the stack's own wrappers
-(`"$STACK_ROOT/bin/magento" …`).
+(`"$STACK_ROOT/bin/magento" …`). `SCHEMA_UPGRADED` is `1` when the release ran
+`setup:upgrade`. The release is already public when the hook runs, so a hook that fails
+makes `bin/release` fail without taking the release back.
 
 ## Rules
 
