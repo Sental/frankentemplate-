@@ -288,8 +288,8 @@ services:
     build:
       context: {{DEPLOY_DIR}}/config/opensearch
       args:
-        OPENSEARCH_TAG: ${OPENSEARCH_TAG:-3.9.0}
-    image: {{PROJECT}}-opensearch:${OPENSEARCH_TAG:-3.9.0}
+        OPENSEARCH_TAG: ${OPENSEARCH_TAG:-3.10.0}
+    image: {{PROJECT}}-opensearch:${OPENSEARCH_TAG:-3.10.0}
     container_name: {{PROJECT}}-opensearch
     restart: unless-stopped
     logging: *logging

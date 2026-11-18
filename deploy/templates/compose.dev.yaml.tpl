@@ -178,7 +178,7 @@ services:
 
   {{PROJECT}}-opensearch-dashboards:
     profiles: ["search-ui"]
-    image: opensearchproject/opensearch-dashboards:${DASHBOARDS_TAG:-3.9.0}
+    image: opensearchproject/opensearch-dashboards:${DASHBOARDS_TAG:-3.10.0}
     container_name: {{PROJECT}}-opensearch-dashboards
     restart: unless-stopped
     logging: *logging
