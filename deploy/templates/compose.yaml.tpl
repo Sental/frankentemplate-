@@ -211,7 +211,7 @@ services:
   # so a full instance never drops a live session for cache data.
   # ---------------------------------------------------------------------------
   {{PROJECT}}-valkey-session:
-    image: valkey/valkey:${VALKEY_TAG:-9.1.3-alpine}
+    image: valkey/valkey:${VALKEY_TAG:-9.2.0-alpine}
     container_name: {{PROJECT}}-valkey-session
     restart: unless-stopped
     logging: *logging
@@ -234,7 +234,7 @@ services:
   # release.
   # ---------------------------------------------------------------------------
   {{PROJECT}}-valkey-cache:
-    image: valkey/valkey:${VALKEY_TAG:-9.1.3-alpine}
+    image: valkey/valkey:${VALKEY_TAG:-9.2.0-alpine}
     container_name: {{PROJECT}}-valkey-cache
     restart: unless-stopped
     logging: *logging
