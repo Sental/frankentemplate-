@@ -131,7 +131,7 @@ services:
     network_mode: none
 
   {{PROJECT}}-dozzle:
-    image: amir20/dozzle:${DOZZLE_TAG:-v11.4.2}
+    image: amir20/dozzle:${DOZZLE_TAG:-v11.5.0}
     container_name: {{PROJECT}}-dozzle
     restart: unless-stopped
     logging: *logging
